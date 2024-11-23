@@ -187,7 +187,7 @@ class ExampleAgent(Brain):
                 #print(f"looking in direction {dir}")
                 if neighbor is None:
                     continue
-                if neighbor.is_normal_cell:
+                if neighbor.is_normal_cell():
                     #if the neighbor didn't come from anywhere yet
                     move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
                     new_cost = cost_from_start[current_cell] + move_cost #add the cost to move to neighbor cost
