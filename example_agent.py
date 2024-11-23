@@ -199,9 +199,9 @@ class ExampleAgent(Brain):
                         weight = new_cost + self.heuristics(neighbor,goal_cell)
                         frontier.put(neighbor, weight) #that means it was on the front line and need to be added
                         came_from[neighbor] = current_cell #link it to the grid that it came from
-        if goal_cell not in came_from:
-            BaseAgent.log(LogLevels.Warning, "No available path to the goal.")
-            return {}, {}  # Indicate no path found
+        # if goal_cell not in came_from:
+        #     BaseAgent.log(LogLevels.Warning, "No available path to the goal.")
+        #     return {}, {}  # Indicate no path found
         
         return came_from, cost_from_start
     
