@@ -219,15 +219,27 @@ class ExampleAgent(Brain):
         #print("PATH" + str(path))
         return path
     
-    def locate_survivor(self, grid):
+    #def locate_survivor(self, grid):
+    #    for row in grid:
+    #        for cell in row:
+    #            if cell.survivor_chance != 0: 
+    #                return cell.location
+    #    return None
+    
+    # Returns a list of cells containing survivors
+    def survivors_list(self, grid):
+        surv_list = []
         for row in grid:
             for cell in row:
-                if cell.survivor_chance != 0: 
-                    return cell.location
-        return None
+                if cell.survivor_chance != 0:
+                    surv_list.append(cell)
+        return surv_list
+    
     
     def heuristics (self,a,b):
         return max(abs(a.location.x-b.x),abs(a.location.y-b.y))
+    
+    
     @override
     def think(self) -> None:
         BaseAgent.log(LogLevels.Always, "Thinking")
@@ -245,7 +257,27 @@ class ExampleAgent(Brain):
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        self.survivor_location = self.locate_survivor(world.get_world_grid())
+        
+        current_grid = world.get_cell_at(self._agent.get_location())
+        
+        surv_list = self.survivors_list(world.get_world_grid())
+        
+        # From list of survivors, checks least cost
+        cost_list = []
+        target_cell = current_grid
+        if surv_list:
+            for cell in surv_list:
+                returned_camefrom, returned_cost_from_start = self.a_star(current_grid, cell.location)
+                cost_list.append(returned_cost_from_start[cell])
+            lowest_cost = min(cost_list)
+            target_cell_index = cost_list.index(lowest_cost)
+            target_cell = surv_list[target_cell_index]
+        else:
+            # There are no more survivors left, do nothing
+            self.send_and_end_turn(MOVE(Direction.CENTER))
+          
+        self.survivor_location = target_cell.location
+        
         # Fetch the cell at the agent’s current location. If the location is outside the world’s bounds,
         # return a default move action and end the turn.
         cell = world.get_cell_at(self._agent.get_location())
@@ -259,27 +291,30 @@ class ExampleAgent(Brain):
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        top_layer = grid.get_top_layer()
-        if top_layer:
-            self.send_and_end_turn(SAVE_SURV())
-            return
+        #top_layer = grid.get_top_layer()
+        #if top_layer:
+        #    self.send_and_end_turn(SAVE_SURV())
+        #    return
         
         if cell is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        
-        
 
         # Get the top layer at the agent’s current location.
         top_layer = cell.get_top_layer()
 
-        # If a survivor is present, save it and end the turn.
+        # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
+            self.survivor_grid.set_top_layer(None)
+            self.survivor_grid.survivor_chance = 0 # this should only be applied if all layers are checked
             self.send_and_end_turn(SAVE_SURV())
+                
+            
             return
-
+        
         current_grid = world.get_cell_at(self._agent.get_location())
         #print(str(current_grid.location.x)+str (current_grid.location.y))     
+        
         returned_camefrom, returned_cost_from_start = self.a_star(current_grid, self.survivor_location)
         self.path = self.reconstruct_path(returned_camefrom, current_grid, self.survivor_grid)
         
@@ -295,7 +330,6 @@ class ExampleAgent(Brain):
             # Default action: Stay in place if no path is available or path is empty
             self.send_and_end_turn(MOVE(Direction.CENTER))
         
-        
         # If rubble is present, clear it and end the turn.
         if isinstance(top_layer, Rubble):
             self.send_and_end_turn(TEAM_DIG())
@@ -303,6 +337,7 @@ class ExampleAgent(Brain):
 
         # Default action: Move the agent north if no other specific conditions are met.
         self.send_and_end_turn(MOVE(Direction.NORTH))
+        
     def send_and_end_turn(self, command: AgentCommand):
         """Send a command and end your turn."""
         BaseAgent.log(LogLevels.Always, f"SENDING {command}")
