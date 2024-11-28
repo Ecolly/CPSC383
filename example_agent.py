@@ -49,6 +49,7 @@ class PriorityQueue:
 
 
 class ExampleAgent(Brain):
+    agent_list = AgentIDList()
     def __init__(self) -> None:
         super().__init__()
         self._agent: BaseAgent = BaseAgent.get_base_agent()
@@ -58,7 +59,7 @@ class ExampleAgent(Brain):
         self.survivor_location = None  # survivors location
         self.survivor_cell = None
         #Leader variables
-        self.all_agent_locations = [None]*7
+        self.all_agent_information = []
         self.received_all_locations = False
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
@@ -79,27 +80,21 @@ class ExampleAgent(Brain):
         BaseAgent.log(LogLevels.Always, f"SEND_MESSAGE_RESULT: {smr}")
         
         #BaseAgent.log(LogLevels.Test, f"{smr}")
-        if (self._agent.get_agent_id().id==1):
-            if smr.msg.startswith("LOCATION:"):
-                #append the info back to the consolidated list of agents
-                agent_id = smr.from_agent_id.id #Get the agents ID
-                    
-                world = self.get_world()
-                if world is None:
-                    self.send_and_end_turn(MOVE(Direction.CENTER))
-                    return
-                location = smr.msg[9:]
-                x, y = map(int, location.strip("()").split(","))  # Parse coordinates
-                self.all_agent_locations[agent_id-1] = (x, y)
-                if len(self.all_agent_locations) == 7:  # Assuming there are 7 agents
-                    self.received_all_locations = True
-                    BaseAgent.log(LogLevels.Always, "All agent locations received.")            
-        
         #Differentiate the leader receiving the information vs everyone else here receiving information from the leader
-        # if (self._agent.get_agent_id==1):
-        #     if smr.msg.startswith("LOCATION:"):
-                #check for surivvors on the map and see if there are any available surivivors present
-                    
+
+        if (self._agent.get_agent_id().id==1):
+            #append the info back to the consolidated list of agents
+            msg = smr.msg 
+            if msg.startswith("AGENT_INFO:"):
+                agent_id = smr.from_agent_id.id #Get the agents ID
+                info_part = msg.split(":")[1].strip() 
+                x, y, energy = map(int, info_part.split(","))
+                agent_info_tuple = (x, y, energy)
+                self.all_agent_information.append(agent_info_tuple)
+                if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
+                    self.received_all_locations = True
+                    BaseAgent.log(LogLevels.Always, "All agent locations received.")
+        
         if smr.msg.startswith("PATH:"):
             
             serialized_path = smr.msg[5:]  # Extract the path string after "PATH:"
@@ -311,15 +306,16 @@ class ExampleAgent(Brain):
         #BaseAgent.log(LogLevels.Always, "Thinking about me")
         BaseAgent.log(LogLevels.Always, "test")
         
+        
         #LEADER CODE (agent with id of 1 will be assigned)
         if (self._agent.get_agent_id().id==1 and self.received_all_locations == True):
+            BaseAgent.log(LogLevels.Always, f"THE GREAT LEADER IS THINKING")
             #Calculates the path of each agent to each survivor
-            print(self.all_agent_locations)
             world = self.get_world()
             if world is None:
                 self.send_and_end_turn(MOVE(Direction.CENTER))
                 return
-            print(self.all_agent_locations)  #List of all agent locations
+            print(self.all_agent_information)  #List of all agent locations
             current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
             #READ ME:
             surv_list = self.survivors_list(world.get_world_grid()) #get the list of the survivors cells
@@ -346,7 +342,7 @@ class ExampleAgent(Brain):
                     
             returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_location)
             path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_location)
-            BaseAgent.log(LogLevels.Always, f"Serialized path{path}")
+            
             
             
             serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in path)
@@ -402,7 +398,8 @@ class ExampleAgent(Brain):
             BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
             self._agent.send(
                 SEND_MESSAGE(
-                    AgentIDList([]), f"LOCATION:{current_grid.location.x, current_grid.location.y}"
+                    AgentIDList(), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
+                    #I dont know how to make it send to one specific person only >:(
             )
         ) 
         if self.path and len(self.path) > 0:
