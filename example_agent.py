@@ -20,6 +20,7 @@ from aegis import (
     Rubble,
     SurroundInfo,
     Survivor,
+    Location,
 )
 
 from agent import BaseAgent, Brain, LogLevels
@@ -48,19 +49,17 @@ class PriorityQueue:
 
 
 class ExampleAgent(Brain):
-    shared_list = [0,0,0,0,0,0,0]
     def __init__(self) -> None:
         super().__init__()
         self._agent: BaseAgent = BaseAgent.get_base_agent()
         self._agent = BaseAgent.get_base_agent()
-        # self.frontier = PriorityQueue()
-        # self.came_from = dict()
-        # self.cost_from_start = dict()
         self.path = None  # the path that will be taken
         self.current = None  # current
         self.survivor_location = None  # survivors location
         self.survivor_cell = None
-
+        #Leader variables
+        self.all_agent_locations = [None]*7
+        self.received_all_locations = False
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -78,8 +77,29 @@ class ExampleAgent(Brain):
     @override
     def handle_send_message_result(self, smr: SEND_MESSAGE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SEND_MESSAGE_RESULT: {smr}")
-        BaseAgent.log(LogLevels.Test, f"{smr}")
         
+        #BaseAgent.log(LogLevels.Test, f"{smr}")
+        if (self._agent.get_agent_id().id==1):
+            if smr.msg.startswith("LOCATION:"):
+                #append the info back to the consolidated list of agents
+                agent_id = smr.from_agent_id.id #Get the agents ID
+                    
+                world = self.get_world()
+                if world is None:
+                    self.send_and_end_turn(MOVE(Direction.CENTER))
+                    return
+                location = smr.msg[9:]
+                x, y = map(int, location.strip("()").split(","))  # Parse coordinates
+                self.all_agent_locations[agent_id-1] = (x, y)
+                if len(self.all_agent_locations) == 7:  # Assuming there are 7 agents
+                    self.received_all_locations = True
+                    BaseAgent.log(LogLevels.Always, "All agent locations received.")            
+        
+        #Differentiate the leader receiving the information vs everyone else here receiving information from the leader
+        # if (self._agent.get_agent_id==1):
+        #     if smr.msg.startswith("LOCATION:"):
+                #check for surivvors on the map and see if there are any available surivivors present
+                    
         if smr.msg.startswith("PATH:"):
             
             serialized_path = smr.msg[5:]  # Extract the path string after "PATH:"
@@ -90,7 +110,7 @@ class ExampleAgent(Brain):
             try:
                 # Convert the string back into a list of (x, y) coordinates
                 path = [
-                    (int(x), int(y))  # Convert to cell objects
+                    world.get_cell_at(Location(int(x), int(y)))  # Convert to cell objects
                     for x, y in (point.split(",") for point in serialized_path.split(";"))
                 ]
                 self.path = path
@@ -252,8 +272,7 @@ class ExampleAgent(Brain):
         return came_from, cost_from_start #returns the list of cells
         #came from is  dictionary that maps each node to the node it reached
         #cost_from_start gets the cost to reach every visited node from the start node
-
-
+    
     def reconstruct_path(self, came_from, start, goal) -> list:
         current = goal
         path = [current]
@@ -274,6 +293,15 @@ class ExampleAgent(Brain):
                 if cell.survivor_chance != 0:
                     surv_list.append(cell)
         return surv_list
+    
+    def charging_cell_list(self, grid): 
+        #returns a list of survivor cells
+        charging_cell = []
+        for row in grid:
+            for cell in row:
+                if cell.is_charging_cell() == True:
+                    charging_cell.append(cell)
+        return charging_cell
 
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
@@ -284,16 +312,16 @@ class ExampleAgent(Brain):
         BaseAgent.log(LogLevels.Always, "test")
         
         #LEADER CODE (agent with id of 1 will be assigned)
-        if (self._agent.get_agent_id().id==1 and self._agent.get_round_number()==1):
+        if (self._agent.get_agent_id().id==1 and self.received_all_locations == True):
             #Calculates the path of each agent to each survivor
-            BaseAgent.log(LogLevels.Always, "I am here")
+            print(self.all_agent_locations)
             world = self.get_world()
             if world is None:
                 self.send_and_end_turn(MOVE(Direction.CENTER))
                 return
-            
+            print(self.all_agent_locations)  #List of all agent locations
             current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
-            # From list of survivors, checks the least cost3
+            #READ ME:
             surv_list = self.survivors_list(world.get_world_grid()) #get the list of the survivors cells
             self.survivor_location = surv_list[0] #pick one right now, for testing
             BaseAgent.log(LogLevels.Always, f" Survival List {self.survivor_location}")
@@ -328,46 +356,7 @@ class ExampleAgent(Brain):
                     AgentIDList(), f"PATH:{serialized_path}"
                 )
             ) 
-        BaseAgent.log(LogLevels.Always, "pass the function")
-        # Send a message to other agents in my group.
-        # Empty AgentIDList will send to group members.
-        # self._agent.send(
-        #     SEND_MESSAGE(
-        #         AgentIDList(), f"Hello from agent {self._agent.get_agent_id().id}"
-        #     )
-        # )        
-        # Retrieve the current state of the world.
-        # world = self.get_world()
-        # if world is None:
-        #     self.send_and_end_turn(MOVE(Direction.CENTER))
-        #     return
-        # current_grid = world.get_cell_at(self._agent.get_location())
 
-        # surv_list = self.survivors_list(world.get_world_grid())
-        # self.shared_list[self._agent.get_agent_id().id] = 1
-        # BaseAgent.log(LogLevels.Always, f"shared{self.shared_list}")
-
-        # # From list of survivors, checks the least cost
-        # cost_list = []
-        # target_cell = current_grid
-        # if surv_list:
-        #     for cell in surv_list:
-        #         returned_came_from, returned_cost_from_start = self.a_star(current_grid, cell.location)
-        #         cost_list.append(returned_cost_from_start[cell])
-        #     lowest_cost = min(cost_list)
-        #     target_cell_index = cost_list.index(lowest_cost)
-        #     target_cell = surv_list[target_cell_index]
-        # else:
-        #     # There are no more survivors left, do nothing
-        #     self.send_and_end_turn(MOVE(Direction.CENTER))
-
-        # self.survivor_location = target_cell.location
-
-        # Fetch the cell at the agent’s current location. If the location is outside the world’s bounds,
-        # return a default move action and end the turn.
-        # cell = world.get_cell_at(self._agent.get_location())
-
-        # self.survivor_cell = world.get_cell_at(self.survivor_location)
 
         world = self.get_world()
         if world is None:
@@ -395,10 +384,9 @@ class ExampleAgent(Brain):
 
         # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
-            self.survivor_cell.set_top_layer(None)
-            self.survivor_cell.survivor_chance = 0  # this should only be applied if all layers are checked
+            # self.survivor_cell.set_top_layer(None)
+            # self.survivor_cell.survivor_chance = 0  # this should only be applied if all layers are checked
             self.send_and_end_turn(SAVE_SURV())
-
             return
 
         current_grid = world.get_cell_at(self._agent.get_location())
@@ -408,11 +396,20 @@ class ExampleAgent(Brain):
         # self.path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_cell)
 
         # Follow the next step in the path, if available.
+        
+        #first round everyone send their location
+        if (self._agent.get_round_number()==1):
+            BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
+            self._agent.send(
+                SEND_MESSAGE(
+                    AgentIDList([]), f"LOCATION:{current_grid.location.x, current_grid.location.y}"
+            )
+        ) 
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
             direction = self.get_direction_to_move(agent_location.x, agent_location.y,
-                                                   next_location[0], next_location[1])
+                                                   next_location.location.x, next_location.location.y)
             self.send_and_end_turn(MOVE(direction))  # Send the move command for the calculated direction
             return
         else:
