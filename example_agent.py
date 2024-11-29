@@ -147,7 +147,7 @@ class ExampleAgent(Brain):
     def handle_save_surv_result(self, ssr: SAVE_SURV_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SAVE_SURV_RESULT: {ssr}")
         BaseAgent.log(LogLevels.Test, f"{ssr}")
-
+        self.update_surround(ssr.surround_info)
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
     # prd, the instance of PREDICT_RESULT, details of predication
@@ -194,7 +194,7 @@ class ExampleAgent(Brain):
             self.send_and_end_turn(SAVE_SURV())
         else:
             BaseAgent.log(LogLevels.Always, f"Rubble cleared, updated top layer: {top_layer}")
-
+        self.update_surround(tdr.surround_info)
         print("#--- You need to implement handle_team_dig_result function! ---#")
     ################################################################
     def get_direction_to_move(self, current_x, current_y, target_x, target_y):
@@ -334,7 +334,7 @@ class ExampleAgent(Brain):
                     cost = returned_cost_from_start.get(survivor, float('inf'))
                     agent_costs.append((cost, agent[0], survivor, path))
                 else:
-                    print("Path not valid")
+                    print(f"Agent{agent[0]} Path not valid")
 
         # Sort the agent_costs based on cost
         agent_costs.sort(key=lambda x: x[0])
@@ -415,6 +415,7 @@ class ExampleAgent(Brain):
         # If rubble is present, clear it and end the turn.
         if isinstance(top_layer, Rubble):
             self.send_and_end_turn(TEAM_DIG())
+            
             return
 
         # If a survivor is present, save them and end the turn.
