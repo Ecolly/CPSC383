@@ -63,8 +63,10 @@ class ExampleAgent(Brain):
         self.survivor_cell = None
         #Leader variables
         self.all_agent_information = []
+        self.all_agent_pairs = []
         self.received_all_locations = False
         self.inital_assignment = False
+
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -98,12 +100,23 @@ class ExampleAgent(Brain):
                 if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
                     self.received_all_locations = True
                     BaseAgent.log(LogLevels.Always, "All agent locations received.")
+
+            # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
+            if msg.startswith("PAIR_INFO:"):
+                info_part = msg.split(":")[1].strip() 
+                agent_id_str, pair_id_str = info_part.split("w")
+                agent_id = int(agent_id_str.strip())
+                pair_id = int(pair_id_str.strip())
+                agent_id_pair = (agent_id, pair_id)
+                self.all_agent_pairs.append(agent_id_pair)
+                BaseAgent.log(LogLevels.Always, f"Pair ID: {pair_id}")
+                
             # If any agents reports back after competing task
             if msg.startswith("SUCCESS:"):
                 agent_id = smr.from_agent_id.id
                 #Check for additional survivors
-                    #reassign them if there are additional survivors
-            
+                #reassign them if there are additional survivors
+
         #AGENTS (also including leader as a regular agent)vvvvvvvvvvvvvv
         
         if smr.msg.startswith("PATH:"):
@@ -122,10 +135,11 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
             except Exception as e:
                 BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
+
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
-    
+
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
         BaseAgent.log(LogLevels.Test, f"{mr}")
@@ -150,7 +164,8 @@ class ExampleAgent(Brain):
         self.update_surround(ssr.surround_info)
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
-    # prd, the instance of PREDICT_RESULT, details of predication
+    # prd, the instance of PREDICT_RESULT, details of prediction
+
     @override
     def handle_predict_result(self, prd: PREDICT_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"PREDICT_RESULT: {prd}")
@@ -232,7 +247,9 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
-        # Get hte world
+
+        # Get the world
+
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -307,9 +324,9 @@ class ExampleAgent(Brain):
                     charging_cell.append(cell)
         return charging_cell 
 
-
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
+      
     #returns a list of cost to get to each survivor on the map
     def agent_to_survivor(self, agent_list, survivor_list):
         print(f"SURVIVOR LIST {survivor_list}")
@@ -344,28 +361,45 @@ class ExampleAgent(Brain):
         assigned_survivor2 = set()
         assigned_agents = set()
         assignments = []
+        pair_id = 0
 
         # First pass: Assign one agent to each survivor
         for cost, agent_id, survivor, path in agent_costs:
             if agent_id not in assigned_agents and survivor not in assigned_survivors:
-                assignments.append((agent_id, survivor, path))  # Assign the agent to the survivor
+                pair_id += 1
+                assignments.append((agent_id, survivor, path, pair_id))  # Assign the agent to the survivor
                 assigned_agents.add(agent_id)             # Mark the agent as assigned
                 assigned_survivors.add(survivor)          # Mark the survivor as assigned
         agent_costs.sort(key=lambda x: x[0])
-        # Second pass: Assign remaining agents to survivors
+        
+        # Second pass: Assign remaining agents to survivors/original agents
         for cost, agent_id, survivor, path in agent_costs:
-            if agent_id not in assigned_agents and survivor not in assigned_survivor2:
-                assignments.append((agent_id, survivor, path))  # Assign the agent to the survivor
-                assigned_agents.add(agent_id)  
-                assigned_survivor2.add(survivor)   # Mark the agent as assigned            
-
+            if agent_id not in assigned_agents and survivor not in assigned_survivor2: # Pairs remaining agent to lowest-cost survivor
+                for original_agent in assignments:
+                    if original_agent[1] == survivor and agent_id != original_agent[0]: # Checks original agent that was already assigned to that survivor
+                        
+                        for agent_info in self.all_agent_information:
+                            if original_agent[0] == agent_info[0]:
+                                original_agent_cell = world.get_cell_at(Location(agent_info[1], agent_info[2])) # Get original agent's cell
+                            elif agent_id == agent_info[0]:
+                                partner_agent_cell = world.get_cell_at(Location(agent_info[1], agent_info[2])) # Get partner agent's cell
+                        # Create path from partner agent to original agent
+                        returned_came_from, returned_cost_from_start = self.a_star(partner_agent_cell, original_agent_cell)
+                        valid_path = self.reconstruct_path(returned_came_from, partner_agent_cell, original_agent_cell)
+                        
+                        if valid_path:
+                            pair_id = original_agent[3]  # Assigns the same pair_id as original agent
+                            path = valid_path + original_agent[2] # Create path from partner agent to original agent to survivor
+                            assignments.append((agent_id, survivor, path, pair_id))  # Assign the agent to the survivor
+                            assigned_agents.add(agent_id)  
+                            assigned_survivor2.add(survivor)   # Mark the agent as assigned   
         return assignments
+
 
     @override
     def think(self) -> None:
         #BaseAgent.log(LogLevels.Always, "Thinking about me")
         BaseAgent.log(LogLevels.Always, "test")
-        
         
         #LEADER CODE (agent with id of 1 will be assigned)
         if (self._agent.get_agent_id().id==1 and self.received_all_locations == True and self.inital_assignment == False):
@@ -380,8 +414,9 @@ class ExampleAgent(Brain):
             current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
             surv_list = self.survivors_list(world.get_world_grid()) #get the list of the survivors cells
             assignments = self.agent_to_survivor(self.all_agent_information, surv_list)
-            
+
             for assignment in assignments:
+            
                 serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in assignment[2])
                 BaseAgent.log(LogLevels.Always, f"Serialized path{serialized_path}")
                 self._agent.send(
@@ -389,17 +424,25 @@ class ExampleAgent(Brain):
                         AgentIDList([AgentID(assignment[0], 1)]), f"PATH:{serialized_path}"
                     )
                 ) 
+                
+                # Send Pair ID to Leader
+                pair_id = assignment[3]
+                BaseAgent.log(LogLevels.Always, f"Setting Pair ID to {pair_id}")
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(1, 1)]), f"PAIR_INFO:{assignment[0]}w{pair_id}"
+                    )
+                )
+                
+                
                 BaseAgent.log(LogLevels.Always, f"Sent")
             self.inital_assignment = True
-    
 
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        if world is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-            return
+
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER)) 
@@ -414,8 +457,17 @@ class ExampleAgent(Brain):
 
         # If rubble is present, clear it and end the turn.
         if isinstance(top_layer, Rubble):
-            self.send_and_end_turn(TEAM_DIG())
+
+            # Rubble only needs 1 person
+            if top_layer.remove_agents == 1:
+                self.send_and_end_turn(TEAM_DIG())
             
+            else:
+                ## The rubble requires 2 people!
+                ### NEED TO IMPLEMENT
+                ### Check if pairs are together
+                ### If not, reassign pairs!
+                self.send_and_end_turn(TEAM_DIG())
             return
 
         # If a survivor is present, save them and end the turn.
@@ -461,6 +513,7 @@ class ExampleAgent(Brain):
                         
         ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
         ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
+
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
