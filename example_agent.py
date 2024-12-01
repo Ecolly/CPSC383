@@ -37,6 +37,7 @@ class PriorityQueue:
     def __init__(self):
         self.elements: list[tuple[float, int, T]] = []
         self._counter = 0  # Tie-breaker counter
+       
 
     def empty(self) -> bool:
         return not self.elements
@@ -66,6 +67,9 @@ class ExampleAgent(Brain):
         self.all_agent_pairs = []
         self.received_all_locations = False
         self.inital_assignment = False
+        self.current_goal = None  # Initialize the current goal
+        self.goal_queue = []  # Queue of tasks
+        self.current_goal = None  # Current task
 
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
@@ -139,22 +143,57 @@ class ExampleAgent(Brain):
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
-
+    
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
+        # Log the move result for debugging
         BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
-        BaseAgent.log(LogLevels.Test, f"{mr}")
-        # after issuing MOVE command, simulation determines if the move is valid
-        # generates a MOVE_RESULT object mr
-        print("#--- You need to implement handle_move_result function! ---#")
+        BaseAgent.log(LogLevels.Always, f"MOVE_RESULT Attributes: {dir(mr)}")
+        BaseAgent.log(LogLevels.Always, f"SURROUND_INFO: {mr.surround_info}")
+
+        # Update the surroundings, including the current cell
         self.update_surround(mr.surround_info)
 
+        # Retrieve the current cell using the agent's location
+        current_cell = self.get_world().get_cell_at(self._agent.get_location())
+        if current_cell is not None:
+            BaseAgent.log(LogLevels.Always, f"Updated current cell: {current_cell}")
+
+            # Update agent's location and energy
+            self._agent.set_location(current_cell.location)
+            self._agent.set_energy_level(mr.energy_level)
+
+            # Check if the task is complete
+            if self.current_goal and self.check_task_completion(self.current_goal):
+                BaseAgent.log(LogLevels.Always, "Goal completed after movement. Reassigning task.")
+                self.current_goal = None
+                self.reassign_task()
+        else:
+            BaseAgent.log(LogLevels.Error, "Failed to retrieve the current cell after updating surroundings.")
+
+    
     # Contain information about agent observations
     @override
     def handle_observe_result(self, ovr: OBSERVE_RESULT) -> None:
-        BaseAgent.log(LogLevels.Always, f"OBSERVER_RESULT: {ovr}")
-        BaseAgent.log(LogLevels.Test, f"{ovr}")
+        ##BaseAgent.log(LogLevels.Always, f"OBSERVER_RESULT: {ovr}")
+        ##BaseAgent.log(LogLevels.Test, f"{ovr}")
+        ##print("#--- You need to implement handle_observe_result function! ---#")
+        # Update surroundings
+        self.update_surround(ovr.surround_info)
+        # Detect new tasks (e.g., survivors) in observed surroundings
+        for direction in Direction:
+            cell_info = ovr.surround_info.get_surround_info(direction)
+            if cell_info and isinstance(cell_info.top_layer, Survivor):
+                survivor_cell = self.get_world().get_cell_at(cell_info.location)
 
-        print("#--- You need to implement handle_observe_result function! ---#")
+                # Add new tasks to the queue, avoiding duplicates
+                if survivor_cell not in self.goal_queue:
+                    self.goal_queue.append(survivor_cell)
+
+        # Trigger reassignment if no goal is set and tasks are available
+        if not self.current_goal and self.goal_queue:
+            self.reassign_task()
+
+        
 
     # Details about the result of attempting to save a survivor
     @override
@@ -211,6 +250,7 @@ class ExampleAgent(Brain):
             BaseAgent.log(LogLevels.Always, f"Rubble cleared, updated top layer: {top_layer}")
         self.update_surround(tdr.surround_info)
         print("#--- You need to implement handle_team_dig_result function! ---#")
+        
     ################################################################
     def get_direction_to_move(self, current_x, current_y, target_x, target_y):
         # Determine horizontal direction
@@ -394,7 +434,64 @@ class ExampleAgent(Brain):
                             assigned_agents.add(agent_id)  
                             assigned_survivor2.add(survivor)   # Mark the agent as assigned   
         return assignments
+    
+    #For reassignment logic
+    def reassign_task(self):
+    #Reassign a new task from the goal queue.
+        if self.goal_queue:
+            next_goal = self.goal_queue.pop(0)
+            self.assign_task(self._agent.get_id(), next_goal)
+            BaseAgent.log(LogLevels.Always, f"Reassigned to new goal: {next_goal.location}")
+        else:
+            BaseAgent.log(LogLevels.Always, "No tasks available for reassignment. Staying Idle.")
+            self.path = []  # Clear the path if no tasks are available
 
+    def assign_task(self, agent_id, goal):
+    #Assign a new task to the agent.
+        self.current_goal = goal  # Set the new goal
+        self.path = self.calculate_path_to_goal(goal)  # Calculate the path to the goal
+        if self.path:
+            BaseAgent.log(LogLevels.Always, f"Path calculated for task: {self.path}")
+        else:
+            BaseAgent.log(LogLevels.Error, "Failed to calculate a path to the goal.")
+            
+        
+    def check_and_handle_task_completion(self, current_cell):
+        if self.current_goal and self._agent.get_location() == self.current_goal.location:
+            top_layer = current_cell.get_top_layer()
+
+            if isinstance(top_layer, WorldObject | None):
+                # Task complete; send success message and reassign
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(1, 1)]),
+                        f"SUCCESS:{current_cell.location.x},{current_cell.location.y},{self._agent.get_energy_level()}"
+                    )
+                )
+                self.current_goal = None
+                print("--- Attempting Reassignment ---")
+                self.reassign_task()
+                return True
+
+            elif isinstance(top_layer, Survivor):
+                # Save the survivor and reassign
+                self.send_and_end_turn(SAVE_SURV())
+                self.current_goal = None
+                print("--- Attempting Reassignment ---")
+                self.reassign_task()
+                return True
+
+        return False
+    
+    def calculate_path_to_goal(self, goal):
+        current_cell = self.get_world().get_cell_at(self._agent.get_location())
+        goal_cell = self.get_world().get_cell_at(goal.location)
+        if not current_cell or not goal_cell:
+            BaseAgent.log(LogLevels.Error, "Invalid cells for path calculation.")
+            return []
+
+        came_from, _ = self.a_star(current_cell, goal_cell)  # Use A* for pathfinding
+        return self.reconstruct_path(came_from, current_cell, goal_cell)
 
     @override
     def think(self) -> None:
@@ -489,8 +586,34 @@ class ExampleAgent(Brain):
         #     )
         # )
         
-
+        current_cell = self.get_world().get_cell_at(self._agent.get_location())
+        # Check and handle task completion
+        if self.check_and_handle_task_completion(current_cell):
+            return
         
+        
+        # Move along the path if available
+        if self.path and len(self.path) > 0:
+            next_location = self.path.pop(0)
+            direction = self.get_direction_to_move(
+                self._agent.get_location().x,
+                self._agent.get_location().y,
+                next_location.location.x,
+                next_location.location.y,
+            )
+            self.send_and_end_turn(MOVE(direction))
+            return
+        
+         # Reassign task if no valid path or tasks are available
+        if not self.current_goal and self.goal_queue:
+            BaseAgent.log(LogLevels.Always, "No current goal. Attempting reassignment.")
+            print("--- Attempting Reassignment ---")
+            self.reassign_task()
+            return
+            
+         
+            #reassignment logic ends
+            
         #first round everyone send their location to the leader for initial task
         if (self._agent.get_round_number()==1):
             BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
@@ -499,8 +622,8 @@ class ExampleAgent(Brain):
                     AgentIDList([AgentID(1,1)]), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
             )
         ) 
-
-            
+        
+           
         #Charging cell code(ish)
         #When an agent lands on a charging cell:
             #Calculates its own energy
