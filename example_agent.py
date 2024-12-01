@@ -66,7 +66,7 @@ class ExampleAgent(Brain):
         self.all_agent_pairs = []
         self.received_all_locations = False
         self.inital_assignment = False
-        
+
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -100,7 +100,7 @@ class ExampleAgent(Brain):
                 if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
                     self.received_all_locations = True
                     BaseAgent.log(LogLevels.Always, "All agent locations received.")
-            
+
             # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
             if msg.startswith("PAIR_INFO:"):
                 info_part = msg.split(":")[1].strip() 
@@ -111,14 +111,12 @@ class ExampleAgent(Brain):
                 self.all_agent_pairs.append(agent_id_pair)
                 BaseAgent.log(LogLevels.Always, f"Pair ID: {pair_id}")
                 
-                
             # If any agents reports back after competing task
             if msg.startswith("SUCCESS:"):
                 agent_id = smr.from_agent_id.id
                 #Check for additional survivors
                 #reassign them if there are additional survivors
-            
-            
+
         #AGENTS (also including leader as a regular agent)vvvvvvvvvvvvvv
         
         if smr.msg.startswith("PATH:"):
@@ -137,11 +135,11 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
             except Exception as e:
                 BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
-        
 
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
+
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
         BaseAgent.log(LogLevels.Test, f"{mr}")
@@ -167,6 +165,7 @@ class ExampleAgent(Brain):
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
     # prd, the instance of PREDICT_RESULT, details of prediction
+
     @override
     def handle_predict_result(self, prd: PREDICT_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"PREDICT_RESULT: {prd}")
@@ -248,7 +247,9 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
+
         # Get the world
+
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -323,9 +324,9 @@ class ExampleAgent(Brain):
                     charging_cell.append(cell)
         return charging_cell 
 
-
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
+      
     #returns a list of cost to get to each survivor on the map
     def agent_to_survivor(self, agent_list, survivor_list):
         print(f"SURVIVOR LIST {survivor_list}")
@@ -437,14 +438,11 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"Sent")
             self.inital_assignment = True
 
-
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        if world is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-            return
+
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER)) 
@@ -515,7 +513,7 @@ class ExampleAgent(Brain):
                         
         ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
         ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
-        
+
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
