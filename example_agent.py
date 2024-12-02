@@ -436,66 +436,50 @@ class ExampleAgent(Brain):
         )
         self.send_and_end_turn(MOVE(direction_to_move))
 
-    # Helper function to calculate total move cost to the survivor
-    def get_cost_to_survivor(self, agent_id, survivor):
-        infCost = 100000000000000000000000000000
-
-        world = self.get_world()  # Get the world (map) where the agent and survivor exist
-        if world is None:
-            # If the world none, return an infinite cost
-            return infCost
-
-        # Find the agent's current position using its ID
-        agent_info = None
-        for agent in self.all_agent_information:
-            if agent[0] == agent_id:
-                agent_info = agent
-                break
-
-        if not agent_info:
-            # if no info found return infinite cost
-            return infCost
-
-        # Get the agent's current cell based on its location
-        current_cell = world.get_cell_at(Location(agent_info[1], agent_info[2]))
-
-        # call A* algorithm to calculate the shortest path cost to the survivor
-        came_from, cost_from_start = self.a_star(current_cell, survivor)
-
-        # Get the cost associated with the survivor
-        # If there's no valid path, return infinite
-
-        cost = cost_from_start.get(survivor, infCost)
-
-        return cost
-
-    # Helper method to find a path that includes charging stops
-    def find_path_with_charging_stops(self, current_location, target_location):
-        # get world
+    # Helper function to find cost of the movement to survivor
+    def energy_to_survivor(self, current_cell, survivor_cell):
+        # Get the world
         world = self.get_world()
-        world_grid = world.get_world_grid()
-
-        # call to get list of charging locations in the world
-        charging_cells = self.charging_cell_list(world_grid)
-        if not charging_cells:
-            # return none if not found
+        if world is None:
             return None
 
-        # find a path to the charging stations, then continue towards the survivor
-        for station in charging_cells:
-            # find a path from the current location to the charging station
-            returned_came_from, returned_cost_from_start = self.a_star(current_location, station.location)
-            charging_path = self.reconstruct_path(returned_came_from, current_location, station.location)
-            if charging_path:
-                # Calculate energy to reach the survivor after charging
-                cost_to_survivor_after_charging = self.get_cost_to_survivor(self._agent.get_agent_id().id, target_location)
+        #### QUEUE ###
+        frontier = []  # Use a heap-based priority queue
+        heapq.heappush(frontier, (0, current_cell))
+        cost_from_start = dict()
+        cost_from_start[current_cell] = 0
 
-                # Check if the agent has enough energy to continue after charging
-                if self._agent.get_energy_level() >= cost_to_survivor_after_charging:
-                    # Return path
-                    return charging_path + self.reconstruct_path(returned_came_from, station.location, target_location)
-                else:
-                    return charging_path
+        while frontier:
+            # Get the cell with the lowest cost
+            current_cost, current_cell = heapq.heappop(frontier)
+
+            # If we reach the survivor, return the energy (cost) required
+            if current_cell == survivor_cell:
+                return current_cost
+
+            # Check the neighboring cells for path
+            for direction in Direction:
+                # Update the neighbor location using the direction
+                neighbor_location = current_cell.location.add(direction)
+                neighbor = world.get_cell_at(neighbor_location)
+
+                # Skip invalid spaces to move
+                if neighbor is None or neighbor.is_killer_cell() or neighbor.is_fire_cell() or neighbor.is_on_fire():
+                    continue
+
+                # Check if the neighbor is a valid cell to move to (normal or charging cell)
+                if neighbor.is_normal_cell() or neighbor.is_charging_cell():
+                    # Calculate the new cost to reach the neighbor
+                    move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
+                    new_cost = current_cost + move_cost
+
+                    # If this path to the neighbor is better (lower cost), update cost and add to the frontier
+                    if neighbor not in cost_from_start or new_cost < cost_from_start[neighbor]:
+                        cost_from_start[neighbor] = new_cost
+                        # Add the neighbor with the updated cost to the queue
+                        heapq.heappush(frontier,(new_cost, neighbor))
+
+        # If the loop finishes without finding the survivor, return None
         return None
 
     ###################################################################
@@ -562,14 +546,13 @@ class ExampleAgent(Brain):
         # move_cost = self.calculate_move_cost_to_goal()
 
         # Check if the agent needs charging
-        if self._agent.get_energy_level() < 250 :
+        if self._agent.get_energy_level() < 251:
             # Move towards the nearest charging station if not on one already
             if not cell.is_charging_cell():
                 self.move_towards_charging_station()
-                return
             if cell.is_charging_cell():
                 # Stay and sleep while energy is not enough
-                while self._agent.get_energy_level() < 250 :
+                while self._agent.get_energy_level() < 250:
                     # Sleep until fully charged
                     self.send_and_end_turn(SLEEP())
                     # Keep the agent sleeping until it is fully recharged
