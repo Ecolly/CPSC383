@@ -20,14 +20,19 @@ from aegis import (
     Rubble,
     SurroundInfo,
     Survivor,
+    Location,
+    AgentID,
+    WorldObject,
+    SLEEP,
 )
 
 from agent import BaseAgent, Brain, LogLevels
-from typing import TypeVar, List, Tuple
+from typing import TypeVar
 import heapq
 
 T = TypeVar('T')
 
+#The a_star algorithm was taken from Assignment 1 by Yufei Zhang
 
 class PriorityQueue:
     def __init__(self):
@@ -47,17 +52,21 @@ class PriorityQueue:
 
 
 class ExampleAgent(Brain):
+    agent_list = AgentIDList()
     def __init__(self) -> None:
         super().__init__()
         self._agent: BaseAgent = BaseAgent.get_base_agent()
         self._agent = BaseAgent.get_base_agent()
-        # self.frontier = PriorityQueue()
-        # self.came_from = dict()
-        # self.cost_from_start = dict()
         self.path = None  # the path that will be taken
         self.current = None  # current
         self.survivor_location = None  # survivors location
-        self.survivor_grid = None
+        self.movement_queue = None
+        self.survivor_cell = None
+        #Leader variables
+        self.all_agent_information = []
+        self.all_agent_pairs = []
+        self.received_all_locations = False
+        self.initial_assignment = False
 
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
@@ -76,13 +85,63 @@ class ExampleAgent(Brain):
     @override
     def handle_send_message_result(self, smr: SEND_MESSAGE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SEND_MESSAGE_RESULT: {smr}")
-        BaseAgent.log(LogLevels.Test, f"{smr}")
-        print("#--- You need to implement handle_send_message_result function! ---#")
+        
+        # Differentiate the leader receiving information vs everyone else receiving information from the leader
+        # For the LEADER
+        if self._agent.get_agent_id().id==1:
+            #append the info back to the consolidated list of agents
+            msg = smr.msg 
+            #Processing the initial assignment with all the information the agents sent
+            if msg.startswith("AGENT_INFO:"):
+                agent_id = smr.from_agent_id.id #Get the agents ID
+                info_part = msg.split(":")[1].strip() 
+                x, y, energy = map(int, info_part.split(","))
+                agent_info_tuple = (agent_id, x, y, energy)
+                self.all_agent_information.append(agent_info_tuple)
+                if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
+                    self.received_all_locations = True
+                    BaseAgent.log(LogLevels.Always, "All agent locations received.")
+
+            # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
+            if msg.startswith("PAIR_INFO:"):
+                info_part = msg.split(":")[1].strip() 
+                agent_id_str, pair_id_str = info_part.split("w")
+                agent_id = int(agent_id_str.strip())
+                pair_id = int(pair_id_str.strip())
+                agent_id_pair = (agent_id, pair_id)
+                self.all_agent_pairs.append(agent_id_pair)
+                BaseAgent.log(LogLevels.Always, f"Pair ID: {pair_id}")
+                
+            # If any agents reports back after competing task
+            if msg.startswith("SUCCESS:"):
+                agent_id = smr.from_agent_id.id
+                # Check for additional survivors
+                # reassign them if there are additional survivors
+
+        #AGENTS (also including leader as a regular agent)
+        
+        if smr.msg.startswith("PATH:"):
+            serialized_path = smr.msg[5:]  # Extract the path string after "agentID:"
+            world = self.get_world()
+            if world is None:
+                self.send_and_end_turn(MOVE(Direction.CENTER))
+                return
+            try:
+                # Convert the string back into a list of (x, y) coordinates
+                path = [
+                    world.get_cell_at(Location(int(x), int(y)))  # Convert to cell objects
+                    for x, y in (point.split(",") for point in serialized_path.split(";"))
+                ]
+                self.path = path
+                BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
+
+            except Exception as e:
+                BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
 
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
-    @override
+
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
         BaseAgent.log(LogLevels.Test, f"{mr}")
@@ -104,21 +163,27 @@ class ExampleAgent(Brain):
     def handle_save_surv_result(self, ssr: SAVE_SURV_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SAVE_SURV_RESULT: {ssr}")
         BaseAgent.log(LogLevels.Test, f"{ssr}")
-
+        self.update_surround(ssr.surround_info)
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
-    # prd, the instance of PREDICT_RESULT, details of predication
+    # prd, the instance of PREDICT_RESULT, details of prediction
+
     @override
     def handle_predict_result(self, prd: PREDICT_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"PREDICT_RESULT: {prd}")
         BaseAgent.log(LogLevels.Test, f"{prd}")
 
     # Gets the result of the agent's attempt to rest or recover
-
     @override
     def handle_sleep_result(self, sr: SLEEP_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SLEEP_RESULT: {sr}")
         BaseAgent.log(LogLevels.Test, f"{sr}")
+
+        if sr.was_successful:
+            BaseAgent.log(LogLevels.Always, f"Agent has slept. Current energy level: {sr.charge_energy}")
+        else:
+            BaseAgent.log(LogLevels.Always, f"Agent could not sleep")
+
         print("#--- You need to implement handle_sleep_result function! ---#")
 
     # Information about the result of a cooperative rubble clearing action
@@ -145,16 +210,19 @@ class ExampleAgent(Brain):
         top_layer = current_cell.top_layer
         if top_layer is None:
             BaseAgent.log(LogLevels.Always, "Rubble cleared.")
+
         elif isinstance(top_layer, Survivor):
             BaseAgent.log(LogLevels.Always, "Rubble cleared, found a survivor!")
             # Save survivor if found
             self.send_and_end_turn(SAVE_SURV())
         else:
             BaseAgent.log(LogLevels.Always, f"Rubble cleared, updated top layer: {top_layer}")
+        self.update_surround(tdr.surround_info)
 
         print("#--- You need to implement handle_team_dig_result function! ---#")
 
     ################################################################
+
     def get_direction_to_move(self, current_x, current_y, target_x, target_y):
         # Determine horizontal direction
         if target_x > current_x:
@@ -190,12 +258,13 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
-        # Get hte world
+        # Get the world
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        #### QUEUE###
+
+        #### QUEUE ###
         frontier = PriorityQueue()
         came_from = dict()
         cost_from_start = dict()
@@ -208,16 +277,18 @@ class ExampleAgent(Brain):
         while not frontier.empty():
             # Get the top layer at the agent’s current location.
             # If a survivor is present, save it and end the turn.
-            if current_cell.location == goal_cell:
-                break
+            if current_cell == goal_cell:
+                break 
+            # BaseAgent.log(LogLevels.Always, f"a_star current: {current_cell}")
+            # BaseAgent.log(LogLevels.Always, f"a_star goal: {goal_cell}")
             current_cell = frontier.get()
-            for dir in Direction:
+            for direction in Direction:
                 # for each neighbour of the current grid that is being evaluated
-                neighbor = world.get_cell_at(current_cell.location.add(dir))
-                # print(f"looking in direction {dir}")
+                neighbor = world.get_cell_at(current_cell.location.add(direction))
+                # BaseAgent.log(LogLevels.Always, f"neighbor: {neighbor}")
                 if neighbor is None:
                     continue
-                if neighbor.is_normal_cell():
+                if neighbor.is_normal_cell() or neighbor.is_charging_cell():
                     # if the neighbor didn't come from anywhere yet
                     move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
                     new_cost = cost_from_start[current_cell] + move_cost  # add the cost to move to neighbor cost
@@ -230,34 +301,24 @@ class ExampleAgent(Brain):
                         weight = new_cost + self.heuristics(neighbor, goal_cell)
                         frontier.put(neighbor, weight)  # that means it was on the front line and need to be added
                         came_from[neighbor] = current_cell  # link it to the grid that it came from
-        # if goal_cell not in came_from:
-        #     BaseAgent.log(LogLevels.Warning, "No available path to the goal.")
-        #     return {}, {}  # Indicate no path found
-
-        return came_from, cost_from_start
-
+        return came_from, cost_from_start #returns the list of cells
+        #came from is  dictionary that maps each node to the node it reached
+        #cost_from_start gets the cost to reach every visited node from the start node
+    
     def reconstruct_path(self, came_from, start, goal) -> list:
         current = goal
-        path = [current.location]
+        path = [current]
         if goal not in came_from:  # no path was found
             return []
         while current != start:
-            path.append(current.location)
+            path.append(current)
             # print(f"current location: ({current.location.x}, {current.location.y})")
             current = came_from[current]
         path.reverse()
-        # print("PATH" + str(path))
         return path
 
-    # def locate_survivor(self, grid):
-    #    for row in grid:
-    #        for cell in row:
-    #            if cell.survivor_chance != 0:
-    #                return cell.location
-    #    return None
-
-    # Returns a list of cells containing survivors
-    def survivors_list(self, grid):
+    def survivors_list(self, grid): 
+        #returns a list of survivor cells
         surv_list = []
         for row in grid:
             for cell in row:
@@ -266,96 +327,335 @@ class ExampleAgent(Brain):
         return surv_list
 
     def heuristics(self, a, b):
-        return max(abs(a.location.x - b.x), abs(a.location.y - b.y))
+        return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
+      
+    #returns a list of cost to get to each survivor on the map
+    def agent_to_survivor(self, agent_list, survivor_list):
+        print(f"SURVIVOR LIST {survivor_list}")
+        # agent is a tuple
+        # survivor_list is a list of survivor cells
+        world = self.get_world()
+        if world is None:
+            self.send_and_end_turn(MOVE(Direction.CENTER))
+            return
+        agent_costs = []
+
+        for survivor in survivor_list:
+            print(f"SURVIVOR {survivor}")
+
+            for agent in agent_list:
+                # Get the cell of the agent
+                current_grid = world.get_cell_at(Location(agent[1], agent[2]))
+                returned_came_from, returned_cost_from_start = self.a_star(current_grid, survivor)
+                path = self.reconstruct_path(returned_came_from, current_grid, survivor)
+
+                if path:  # Valid path
+                    cost = returned_cost_from_start.get(survivor, float('inf'))
+                    agent_costs.append((cost, agent[0], survivor, path))
+                else:
+                    print(f"Agent{agent[0]} Path not valid")
+
+        # Sort the agent_costs based on cost
+        agent_costs.sort(key=lambda x: x[0])
+
+        # Initialize sets and list for assignments
+        assigned_survivors = set()
+        assigned_survivor2 = set()
+        assigned_agents = set()
+        assignments = []
+        pair_id = 0
+
+        # First pass: Assign one agent to each survivor
+        for cost, agent_id, survivor, path in agent_costs:
+            if agent_id not in assigned_agents and survivor not in assigned_survivors:
+                pair_id += 1
+                assignments.append((agent_id, survivor, path, pair_id))  # Assign the agent to the survivor
+                assigned_agents.add(agent_id)             # Mark the agent as assigned
+                assigned_survivors.add(survivor)          # Mark the survivor as assigned
+        agent_costs.sort(key=lambda x: x[0])
+        
+        # Second pass: Assign remaining agents to survivors/original agents
+        for cost, agent_id, survivor, path in agent_costs:
+            if agent_id not in assigned_agents and survivor not in assigned_survivor2: # Pairs remaining agent to lowest-cost survivor
+                for original_agent in assignments:
+                    if original_agent[1] == survivor and agent_id != original_agent[0]: # Checks original agent that was already assigned to that survivor
+                        
+                        for agent_info in self.all_agent_information:
+                            if original_agent[0] == agent_info[0]:
+                                original_agent_cell = world.get_cell_at(Location(agent_info[1], agent_info[2])) # Get original agent's cell
+                            elif agent_id == agent_info[0]:
+                                partner_agent_cell = world.get_cell_at(Location(agent_info[1], agent_info[2])) # Get partner agent's cell
+                        # Create path from partner agent to original agent
+                        returned_came_from, returned_cost_from_start = self.a_star(partner_agent_cell, original_agent_cell)
+                        valid_path = self.reconstruct_path(returned_came_from, partner_agent_cell, original_agent_cell)
+                        
+                        if valid_path:
+                            pair_id = original_agent[3]  # Assigns the same pair_id as original agent
+                            path = valid_path + original_agent[2] # Create path from partner agent to original agent to survivor
+                            assignments.append((agent_id, survivor, path, pair_id))  # Assign the agent to the survivor
+                            assigned_agents.add(agent_id)  
+                            assigned_survivor2.add(survivor)   # Mark the agent as assigned   
+        return assignments
+
+
+    ###################################################################
+
+    #Helper function for identifying charging cells in the world
+    def charging_cell_list(self, grid):
+        # returns a list of survivor cells
+        charging_cell = []
+        for row in grid:
+            for cell in row:
+                if cell.is_charging_cell():
+                    charging_cell.append(cell)
+        return charging_cell
+
+    # Helper function for moving towards charging station
+    def move_towards_charging_station(self):
+        # calculate where charging cells are located in the cell
+        world = self.get_world()
+        world_grid = world.get_world_grid()
+        charging_cell = self.charging_cell_list(world_grid)
+
+        # locate nearest charging station
+        charging_cells = self.charging_cell_list(world_grid)
+        if not charging_cells:
+            self.send_and_end_turn(MOVE(Direction.CENTER))
+            return
+
+        # if charging stations exist
+        agent_location = self._agent.get_location()
+        nearest_charging_cell = min(charging_cell, key=lambda cell: abs(cell.location.x - agent_location.x) + abs(cell.location.y - agent_location.y))
+
+        # move towards charging station
+        direction_to_move = self.get_direction_to_move(
+            agent_location.x,
+            agent_location.y,
+            nearest_charging_cell.location.x,
+            nearest_charging_cell.location.y
+        )
+        self.send_and_end_turn(MOVE(direction_to_move))
+
+    # Helper function to calculate total move cost to the survivor
+    def get_cost_to_survivor(self, agent_id, survivor):
+        infCost = 100000000000000000000000000000
+
+        world = self.get_world()  # Get the world (map) where the agent and survivor exist
+        if world is None:
+            # If the world none, return an infinite cost
+            return infCost
+
+        # Find the agent's current position using its ID
+        agent_info = None
+        for agent in self.all_agent_information:
+            if agent[0] == agent_id:
+                agent_info = agent
+                break
+
+        if not agent_info:
+            # if no info found return infinite cost
+            return infCost
+
+        # Get the agent's current cell based on its location
+        current_cell = world.get_cell_at(Location(agent_info[1], agent_info[2]))
+
+        # call A* algorithm to calculate the shortest path cost to the survivor
+        came_from, cost_from_start = self.a_star(current_cell, survivor)
+
+        # Get the cost associated with the survivor
+        # If there's no valid path, return infinite
+
+        cost = cost_from_start.get(survivor, infCost)
+
+        return cost
+
+    # Helper method to find a path that includes charging stops
+    def find_path_with_charging_stops(self, current_location, target_location):
+        # get world
+        world = self.get_world()
+        world_grid = world.get_world_grid()
+
+        # call to get list of charging locations in the world
+        charging_cells = self.charging_cell_list(world_grid)
+        if not charging_cells:
+            # return none if not found
+            return None
+
+        # find a path to the charging stations, then continue towards the survivor
+        for station in charging_cells:
+            # find a path from the current location to the charging station
+            returned_came_from, returned_cost_from_start = self.a_star(current_location, station.location)
+            charging_path = self.reconstruct_path(returned_came_from, current_location, station.location)
+            if charging_path:
+                # Calculate energy to reach the survivor after charging
+                cost_to_survivor_after_charging = self.get_cost_to_survivor(self._agent.get_agent_id().id, target_location)
+
+                # Check if the agent has enough energy to continue after charging
+                if self._agent.get_energy_level() >= cost_to_survivor_after_charging:
+                    # Return path
+                    return charging_path + self.reconstruct_path(returned_came_from, station.location, target_location)
+                else:
+                    return charging_path
+        return None
+
+    ###################################################################
 
     @override
     def think(self) -> None:
-        BaseAgent.log(LogLevels.Always, "Thinking")
+        #BaseAgent.log(LogLevels.Always, "Thinking about me")
+        BaseAgent.log(LogLevels.Always, "test")
+        
+        #LEADER CODE (agent with id of 1 will be assigned)
+        if self._agent.get_agent_id().id==1 and self.received_all_locations == True and self.initial_assignment == False:
+            BaseAgent.log(LogLevels.Always, f"THE GREAT LEADER IS THINKING")
+            #Calculates the path of each agent to each survivor
+            world = self.get_world()
+            if world is None:
+                self.send_and_end_turn(MOVE(Direction.CENTER))
+                return
 
-        # Send a message to other agents in my group.
-        # Empty AgentIDList will send to group members.
-        self._agent.send(
-            SEND_MESSAGE(
-                AgentIDList(), f"Hello from agent {self._agent.get_agent_id().id}"
-            )
-        )
+            print(self.all_agent_information)  #List of all agent locations
+            
+            current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
+            surv_list = self.survivors_list(world.get_world_grid()) #get the list of the survivors cells
+            assignments = self.agent_to_survivor(self.all_agent_information, surv_list)
 
-        # Retrieve the current state of the world.
+            for assignment in assignments:
+            
+                serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in assignment[2])
+                BaseAgent.log(LogLevels.Always, f"Serialized path{serialized_path}")
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(assignment[0], 1)]), f"PATH:{serialized_path}"
+                    )
+                ) 
+                
+                # Send Pair ID to Leader
+                pair_id = assignment[3]
+                BaseAgent.log(LogLevels.Always, f"Setting Pair ID to {pair_id}")
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(1, 1)]), f"PAIR_INFO:{assignment[0]}w{pair_id}"
+                    )
+                )
+                BaseAgent.log(LogLevels.Always, f"Sent")
+            self.initial_assignment = True
+
+
+        # get world information
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
 
-        current_grid = world.get_cell_at(self._agent.get_location())
-
-        surv_list = self.survivors_list(world.get_world_grid())
-
-        # From list of survivors, checks the least cost
-        cost_list = []
-        target_cell = current_grid
-        if surv_list:
-            for cell in surv_list:
-                returned_came_from, returned_cost_from_start = self.a_star(current_grid, cell.location)
-                cost_list.append(returned_cost_from_start[cell])
-            lowest_cost = min(cost_list)
-            target_cell_index = cost_list.index(lowest_cost)
-            target_cell = surv_list[target_cell_index]
-        else:
-            # There are no more survivors left, do nothing
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-
-        self.survivor_location = target_cell.location
-
-        # Fetch the cell at the agent’s current location. If the location is outside the world’s bounds,
-        # return a default move action and end the turn.
-        cell = world.get_cell_at(self._agent.get_location())
-
-        self.survivor_grid = world.get_cell_at(self.survivor_location)
-
-        if world is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-            return
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
+            self.send_and_end_turn(MOVE(Direction.CENTER)) 
             return
-        # top_layer = grid.get_top_layer()
-        # if top_layer:
-        #    self.send_and_end_turn(SAVE_SURV())
-        #    return
 
+        cell = world.get_cell_at(self._agent.get_location())
         if cell is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
+
+        # calculate move cost to see if the agents need energy
+        # move_cost = self.calculate_move_cost_to_goal()
+
+        # Check if the agent needs charging
+        if self._agent.get_energy_level() < 250 :
+            # Move towards the nearest charging station if not on one already
+            if not cell.is_charging_cell():
+                self.move_towards_charging_station()
+                return
+            if cell.is_charging_cell():
+                # Stay and sleep while energy is not enough
+                while self._agent.get_energy_level() < 250 :
+                    # Sleep until fully charged
+                    self.send_and_end_turn(SLEEP())
+                    # Keep the agent sleeping until it is fully recharged
+                    return
+
+        # Check if the agent needs charging
+        # if move cost is greater than agent should look for a charging cell
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #             # Move towards the nearest charging station if not on one already
+        #             if not cell.is_charging_cell():
+        #                 self.move_towards_charging_station()
+        #                 return
+        #
+        #             # charge until agent has enough energy to move to the survivor
+        #             if cell.is_charging_cell():
+        #                 # Stay and sleep while energy is below the threshold
+        #                 while self._agent.get_energy_level() < move cost to survivor from current position :
+        #                     self.send_and_end_turn(SLEEP())  # Sleep until fully charged
+        #                     return  # Keep the agent sleeping until it is fully recharged
+
 
         # Get the top layer at the agent’s current location.
         top_layer = cell.get_top_layer()
 
         # If rubble is present, clear it and end the turn.
         if isinstance(top_layer, Rubble):
-            self.send_and_end_turn(TEAM_DIG())
+
+            # Rubble only needs 1 person
+            if top_layer.remove_agents == 1:
+                self.send_and_end_turn(TEAM_DIG())
+            
+            else:
+                ## The rubble requires 2 people!
+                ### NEED TO IMPLEMENT
+                ### Check if pairs are together
+                ### If not, reassign pairs!
+                self.send_and_end_turn(TEAM_DIG())
             return
 
         # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
-            self.survivor_grid.set_top_layer(None)
-            self.survivor_grid.survivor_chance = 0  # this should only be applied if all layers are checked
             self.send_and_end_turn(SAVE_SURV())
-
             return
-
+        
         current_grid = world.get_cell_at(self._agent.get_location())
-        # print(str(current_grid.location.x)+str (current_grid.location.y))
+        
+        ############FOR REASSIGNING TASK##############################
+        # If the top layer has no layers (aka no survivors no rubble) - maybe this should be in OBSERVE RESULTS INSTEAD? Not sure 
+        # Send message back to leader indicating mission was successful
+        # if isinstance(top_layer, WorldObject | None): #AND top layer cell = goal_survivor_cell
+        #     BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
+        #     self._agent.send(
+        #         #Send necessary information for the leader to redirect them to another task
+        #         SEND_MESSAGE( 
+        #             AgentIDList([AgentID(1,1)]), f"SUCCESS:{current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
+        #     )
+        # )
 
-        returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_location)
-        self.path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_grid)
+        #first round everyone send their location to the leader for initial task
+        if self._agent.get_round_number()==1:
+            BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
+            self._agent.send(
+                SEND_MESSAGE(
+                    AgentIDList([AgentID(1,1)]), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
+            )
+        )
+            
+        #Charging cell code(ish)
+        #When an agent lands on a charging cell:
+            #Calculates its own energy
+            #compare with allocated path energy
+            #WARNING: YOU MIGHT NEED MORE THAN CALCULATED BECAUSE IT MAY TAKE ENERGY TO DIG RUBBLE
+            #if energy < path energy:
+            #   stay on cell (end its turn)
+            #if energy > path energy (plus more for digging maybe)
+            #   move to the next step in path (look at the function below for implementation)
+                        
+        ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
+        ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
 
-        # Follow the next step in the path, if available.
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
             direction = self.get_direction_to_move(agent_location.x, agent_location.y,
-                                                   next_location.x, next_location.y)
+                                                   next_location.location.x, next_location.location.y)
             self.send_and_end_turn(MOVE(direction))  # Send the move command for the calculated direction
             return
         else:
@@ -363,7 +663,7 @@ class ExampleAgent(Brain):
             self.send_and_end_turn(MOVE(Direction.CENTER))
 
         # Default action: Move the agent north if no other specific conditions are met.
-        self.send_and_end_turn(MOVE(Direction.NORTH))
+        self.send_and_end_turn(MOVE(Direction.CENTER))
 
     def send_and_end_turn(self, command: AgentCommand):
         """Send a command and end your turn."""
@@ -374,15 +674,14 @@ class ExampleAgent(Brain):
     def update_surround(self, surround_info: SurroundInfo):
         """
         Updates the current and surrounding cells of the agent.
-
         You can check assignment 1 to figure out how to use this function.
         """
         world = self.get_world()
         if world is None:
             return
 
-        for dir in Direction:
-            cell_info = surround_info.get_surround_info(dir)
+        for direction in Direction:
+            cell_info = surround_info.get_surround_info(direction)
             if cell_info is None:
                 continue
 
