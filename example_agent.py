@@ -64,9 +64,10 @@ class ExampleAgent(Brain):
         #Leader variables
         self.all_agent_information = []
         self.all_agent_pairs = []
+        self.all_agent_status = []
         self.received_all_locations = False
         self.inital_assignment = False
-        
+
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -100,8 +101,9 @@ class ExampleAgent(Brain):
                 if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
                     self.received_all_locations = True
                     BaseAgent.log(LogLevels.Always, "All agent locations received.")
-            
+
             # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
+            # pair_id = 0 means they've been unpaired
             if msg.startswith("PAIR_INFO:"):
                 info_part = msg.split(":")[1].strip() 
                 agent_id_str, pair_id_str = info_part.split("w")
@@ -112,13 +114,126 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"Pair ID: {pair_id}")
                 
                 
+            if msg.startswith("STATUS_INFO:"):
+                agent_id = smr.from_agent_id.id #Get the agents ID
+                status_str = msg.split(":")[1].strip()
+                status_info = (agent_id, status_str)
+                self.all_agent_status.append(status_info)
+            
+            
+            # Format:   f"UPDATE_STATUS: status w {x},{y},{energy}" 
+            # There are four types of status: "active", "idle", "dead", and "rubble".
+            # "active": Doing a task
+            # "idle,x,y,energy": Finished saving survivor, still has energy left, nothing to do.
+            # "dead": No energy
+            # "rubble": Stuck at a rubble spot that requires 2 agents
+            if msg.startswith("UPDATE_STATUS:"):
+                info_part = msg.split(":")[1].strip()
+                agent_id = smr.from_agent_id.id #Get the agents ID
+                status_str = info_part.split("w")[0].strip()
+                x, y, energy = map(int, (info_part.split("w")[1]).split(","))
+                x_str, y_str, energy_str = map(str, (info_part.split("w")[1]).split(","))
+                
+                # Updating status
+                for agent in self.all_agent_status:
+                    if agent_id == agent[0]:
+                        agent[1] = status_str
+                        
+                # If idle, state coords and energy
+                if status_str == "idle":
+                    for agent in self.all_agent_status:
+                        if agent_id == agent[0]:
+                            agent[1] = status_str + "," + x_str + "," + y_str + "," + energy_str
+                        
+                # If dead, separate from pair
+                if status_str == "dead":
+                    for agent in self.all_agent_pairs:
+                        if agent_id == agent[0]:
+                            agent[1] = 0
+                
+                # Agent is stuck on 2 person rubble. If they have a partner, they wait.
+                # If not, they get a new partner reassigned to them.
+                if status_str == "rubble":
+                    pair_id = -1
+                    partner_id = 0
+                    for agent in self.all_agent_pairs:
+                        if agent_id == agent[0]:
+                            pair_id = agent[0] # Get agent's pair ID
+                    for partner_id_pair in self.all_agent_pairs:
+                        if pair_id == partner_id_pair[1] and agent_id != partner_id_pair[0]: # Checking if they already have a partner
+                            partner = True
+                            partner_id = partner_id_pair[0] # Getting partner's ID
+                            for partner_id_status in self.all_agent_status:
+                                if partner_id_status[0] == partner_id:
+                                    partner_status = partner_id_status[1] # Getting the partner's status
+                                    if partner_status != "rubble":
+                                        BaseAgent.log(LogLevels.Always, f"The partner is already on their way.")
+                                    else:
+                                        # This can only happen if partner is stuck on 2-people rubble on their way to original agent's spawn point
+                                        partner = False
+                                        partner_id_pair[1] = 0 # Remove partner from pairing.
+                                        
+                    if partner == False:
+                        # Agent has no current partner. Assign new partner from idle agents.
+                        
+                        cost_list = []
+                        
+                        for partner in self.all_agent_status:
+
+                            if partner[1].startswith("idle"):
+                                partner_x = int(partner[1]).split(",")[1].strip()
+                                partner_y = int(partner[1]).split(",")[2].strip()
+                                partner_energy = int(partner[1]).split(",")[3].strip()
+                                
+                                world = self.get_world()
+                                rubble_agent_cell = world.get_cell_at(Location(x, y)) # Get rubble agent's cell
+                                partner_agent_cell = world.get_cell_at(Location(partner_x, partner_y)) # Get partner's cell
+                                
+                                # Create path from partner agent to rubble agent
+                                returned_came_from, returned_cost_from_start = self.a_star(partner_agent_cell, rubble_agent_cell)
+                                valid_path = self.reconstruct_path(returned_came_from, partner_agent_cell, rubble_agent_cell)
+                        
+                                if valid_path and partner_energy - returned_cost_from_start > 0:
+                                    cost_list.append(partner[0], returned_cost_from_start, valid_path)
+                                
+                        if len(cost_list) == 0:
+                            BaseAgent.log(LogLevels.Always, f"No agent available to help with rubble.")
+
+                        else:
+                            if len(cost_list) > 1:
+                                cost_list.sort(key=lambda x: x[1]) # If multiple idle agents, get the lowest-cost available partner
+                            partner_id_cost_path = cost_list[0]
+                            for agent_pair in self.all_agent_pairs:
+                                    if agent_pair[0] == partner_id_cost[0]:
+                                        agent_pair[1] = pair_id # Assign same pair ID
+                                            
+                            # REASSIGNMENT CODE GOES HERE.
+                            # PARTNER NEEDS TO GO THROUGH THE PATH OF partner_id_cost_path[2]!!!!!!!
+                            #partner[1] = "active" # Change partner status
+                            BaseAgent.log(LogLevels.Always, f"Sending a new partner to save agent from rubble...")
+                                
+                                
+                
             # If any agents reports back after competing task
             if msg.startswith("SUCCESS:"):
                 agent_id = smr.from_agent_id.id
+                info_part = msg.split(":")[1].strip()
+                x, y, energy = map(int, info_part.split(","))
+                x_str, y_str, energy_str = map(str, info_part.split(","))
+                
+                # Remove from pair
+                for agent in self.all_agent_pairs:
+                    if agent[0] == agent_id:
+                        agent[1] = 0
+                
                 #Check for additional survivors
                 #reassign them if there are additional survivors
-            
-            
+                
+                # vvv If no more survivors, set the agent status to "idle,x,y,energy".
+                for agent in self.all_agent_status:
+                    if agent[0] == agent_id:
+                        agent[1] = "idle" + "," + x_str + "," + y_str + "," + energy_str
+
         #AGENTS (also including leader as a regular agent)vvvvvvvvvvvvvv
         
         if smr.msg.startswith("PATH:"):
@@ -137,11 +252,11 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
             except Exception as e:
                 BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
-        
 
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
+
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
         BaseAgent.log(LogLevels.Test, f"{mr}")
@@ -167,6 +282,7 @@ class ExampleAgent(Brain):
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
     # prd, the instance of PREDICT_RESULT, details of prediction
+
     @override
     def handle_predict_result(self, prd: PREDICT_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"PREDICT_RESULT: {prd}")
@@ -248,7 +364,9 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
+
         # Get the world
+
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -323,9 +441,9 @@ class ExampleAgent(Brain):
                     charging_cell.append(cell)
         return charging_cell 
 
-
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
+      
     #returns a list of cost to get to each survivor on the map
     def agent_to_survivor(self, agent_list, survivor_list):
         print(f"SURVIVOR LIST {survivor_list}")
@@ -375,7 +493,7 @@ class ExampleAgent(Brain):
         for cost, agent_id, survivor, path in agent_costs:
             if agent_id not in assigned_agents and survivor not in assigned_survivor2: # Pairs remaining agent to lowest-cost survivor
                 for original_agent in assignments:
-                    if original_agent[1] == survivor and agent_id != original_agent[0]: # Checks original agent that was already assigned to that survivor
+                    if original_agent[1] == survivor and agent_id != original_agent[0]: # Checks the original agent that was already assigned to that survivor
                         
                         for agent_info in self.all_agent_information:
                             if original_agent[0] == agent_info[0]:
@@ -433,18 +551,22 @@ class ExampleAgent(Brain):
                     )
                 )
                 
+                # Send initial "active" status to Leader
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(1, 1)]), f"STATUS_INFO:active"
+                    )
+                )
+                
                 
                 BaseAgent.log(LogLevels.Always, f"Sent")
             self.inital_assignment = True
-
 
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        if world is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-            return
+
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER)) 
@@ -459,17 +581,20 @@ class ExampleAgent(Brain):
 
         # If rubble is present, clear it and end the turn.
         if isinstance(top_layer, Rubble):
+        
+            self.send_and_end_turn(TEAM_DIG())
 
-            # Rubble only needs 1 person
-            if top_layer.remove_agents == 1:
-                self.send_and_end_turn(TEAM_DIG())
-            
-            else:
-                ## The rubble requires 2 people!
-                ### NEED TO IMPLEMENT
-                ### Check if pairs are together
-                ### If not, reassign pairs!
-                self.send_and_end_turn(TEAM_DIG())
+            # If there is only 1 agent in a 2 person rubble
+            if top_layer.remove_agents == 2:
+                if isinstance(top_layer, Rubble):
+                    current_grid = world.get_cell_at(self._agent.get_location())
+                    BaseAgent.log(LogLevels.Always, f"Agent is stuck on rubble!")
+                    self._agent.send(
+                        SEND_MESSAGE(
+                            AgentIDList([AgentID(1,1)]), f"UPDATE_STATUS: rubble w {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
+                        )
+                    ) 
+
             return
 
         # If a survivor is present, save them and end the turn.
@@ -515,7 +640,7 @@ class ExampleAgent(Brain):
                         
         ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
         ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
-        
+
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
