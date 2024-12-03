@@ -63,15 +63,14 @@ class ExampleAgent(Brain):
         self._agent = BaseAgent.get_base_agent()
         self.path = None  # the path that will be taken
         self.survivor_cell = None  # assigned survivor cell, ultimate goal
-        self.movement_queue = None
-        self.goal_cell = None #Goal cell
         self.partner = None
+        self.detour = [] 
         #Leader variables
         self.all_agent_information = []
         self.all_agent_status = {}
         self.all_agent_task_assignment = {}
         self.all_agent_pairs = {}
-        self.detour = [] #List of cells to make a detour to, but the ultimate goal is the survivor cell!!
+        #List of cells to make a detour to, but the ultimate goal is the survivor cell!!
         self.received_all_locations = False
         self.inital_assignment = False
         self.assigned_survivors = set()
@@ -146,27 +145,6 @@ class ExampleAgent(Brain):
                 BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned survivor cell: {self.survivor_cell}")
             except Exception as e:
                 BaseAgent.log(LogLevels.Always, f"Error parsing survivor: {e}")
-        if msg.startswith("PATH:"):
-            serialized_path = smr.msg[5:]  # Extract the path string after "agentID:"
-            world = self.get_world()
-            if world is None:
-                self.send_and_end_turn(MOVE(Direction.CENTER))
-                return
-            try:
-                # Convert the string back into a list of (x, y) coordinates
-                path = [
-                    world.get_cell_at(Location(int(x), int(y)))  # Convert to cell objects
-                    for x, y in (point.split(",") for point in serialized_path.split(";"))
-                ]
-                self.path = path
-                #BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
-            except Exception as e:
-                BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
-        if msg.startswith("SENT_HELP:"):
-            #TODO the agent asked for help and leader found help
-            info_part = msg.split(":")[1].strip()
-            parnter_id = int(info_part) 
-            self.partner = parnter_id
         if msg.startswith("PARTNER:"):
             info_part = msg.split(":")[1].strip()
             if info_part == "None":
@@ -175,9 +153,6 @@ class ExampleAgent(Brain):
                 partner = int(info_part) 
                 self.partner = partner
                 BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned partner {partner}")
-        # if msg.startswith("REASSIGNED:"):
-            #TODO The agent was free and the leader reassigned them
-            #Receive info on survivor they are saving
         
             
 
@@ -186,10 +161,6 @@ class ExampleAgent(Brain):
     # How much was used during the move
 
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
-        #BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
-        #BaseAgent.log(LogLevels.Test, f"{mr}")
-        # after issuing MOVE command, simulation determines if the move is valid
-        # generates a MOVE_RESULT object mr
         print("#--- You need to implement handle_move_result function! ---#")
         self.update_surround(mr.surround_info)
 
@@ -301,7 +272,6 @@ class ExampleAgent(Brain):
             if current_cell == goal_cell:
                 break 
             # BaseAgent.log(LogLevels.Always, f"a_star current: {current_cell}")
-            # BaseAgent.log(LogLevels.Always, f"a_star goal: {goal_cell}")
             current_cell = frontier.get()
             for dir in Direction:
                 # for each neighbour of the current grid that is being evaluated
