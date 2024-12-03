@@ -22,11 +22,12 @@ from aegis import (
     Survivor,
     Location,
     AgentID,
-    WorldObject, SLEEP,
+    # WorldObject,
+    SLEEP,
 )
 
 from agent import BaseAgent, Brain, LogLevels
-from typing import TypeVar, List, Tuple
+from typing import TypeVar
 import heapq
 
 T = TypeVar('T')
@@ -246,7 +247,9 @@ class ExampleAgent(Brain):
         # Check the current cell info
         
         self.update_surround(tdr.surround_info)
+
     ################################################################
+
     def get_direction_to_move(self, current_x, current_y, target_x, target_y):
         # Determine horizontal direction
         if target_x > current_x:
@@ -282,14 +285,13 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
-
         # Get the world
-
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-        #### QUEUE###
+
+        #### QUEUE ###
         frontier = PriorityQueue()
         came_from = dict()
         cost_from_start = dict()
@@ -302,33 +304,38 @@ class ExampleAgent(Brain):
         while not frontier.empty():
             # Get the top layer at the agent’s current location.
             # If a survivor is present, save it and end the turn.
+
             if current_cell == goal_cell:
                 break 
             # BaseAgent.log(LogLevels.Always, f"a_star current: {current_cell}")
             # BaseAgent.log(LogLevels.Always, f"a_star goal: {goal_cell}")
             current_cell = frontier.get()
+
             for dir in Direction:
                 # for each neighbour of the current grid that is being evaluated
                 neighbor = world.get_cell_at(current_cell.location.add(dir))
+
                 # BaseAgent.log(LogLevels.Always, f"neighbor: {neighbor}")
                 if neighbor is None:
                     continue
-                if neighbor.is_normal_cell():
+
+                if neighbor.is_normal_cell() or neighbor.is_charging_cell():
                     # if the neighbor didn't come from anywhere yet
                     move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
                     new_cost = cost_from_start[current_cell] + move_cost  # add the cost to move to neighbor cost
                     # the total cost of reaching the next node through the current node
-                    if neighbor not in cost_from_start or new_cost < cost_from_start[
-                        neighbor]:  # see if this has been visited before
+
+                    if neighbor not in cost_from_start or new_cost < cost_from_start[neighbor]:  # see if this has been visited before
                         # if the path hasn't been visited, add to frontier
                         # if this new path to this neighbor node
                         cost_from_start[neighbor] = new_cost
                         weight = new_cost + self.heuristics(neighbor, goal_cell)
                         frontier.put(neighbor, weight)  # that means it was on the front line and need to be added
                         came_from[neighbor] = current_cell  # link it to the grid that it came from
-        return came_from, cost_from_start #returns the list of cells
-        #came from is  dictionary that maps each node to the node it reached
-        #cost_from_start gets the cost to reach every visited node from the start node
+
+        return came_from, cost_from_start # returns the list of cells
+        # came from is  dictionary that maps each node to the node it reached
+        # cost_from_start gets the cost to reach every visited node from the start node
     
     def reconstruct_path(self, came_from, start, goal) -> list:
         current = goal
@@ -350,14 +357,15 @@ class ExampleAgent(Brain):
                 if cell.survivor_chance != 0:
                     surv_list.append(cell)
         return surv_list
-    def charging_cell_list(self, grid): 
-        #returns a list of survivor cells
-        charging_cell = []
-        for row in grid:
-            for cell in row:
-                if cell.is_charging_cell() == True:
-                    charging_cell.append(cell)
-        return charging_cell 
+
+    #     def charging_cell_list(self, grid):
+    #         #returns a list of survivor cells
+    #         charging_cell = []
+    #         for row in grid:
+    #             for cell in row:
+    #                 if cell.is_charging_cell() == True:
+    #                     charging_cell.append(cell)
+    #         return charging_cell
 
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
@@ -370,6 +378,7 @@ class ExampleAgent(Brain):
                 # Replace the old tuple in the list
                 agent_info_list[i] = updated_agent
                 break
+
     #returns a list of cost to get to each survivor on the map
     def agent_to_survivor(self, agent_list, survivor_list):
         #print(f"SURVIVOR LIST {survivor_list}")
@@ -472,7 +481,7 @@ class ExampleAgent(Brain):
         self.send_and_end_turn(MOVE(direction_to_move))
 
     # Helper function to find cost of the movement to survivor
-    def energy_to_survivor(self, current_cell, survivor_cell):
+    def energy_to_survivor(self, current_cell: Location, survivor_cell):
         # Get the world
         world = self.get_world()
         if world is None:
@@ -495,8 +504,11 @@ class ExampleAgent(Brain):
             # Check the neighboring cells for path
             for direction in Direction:
                 # Update the neighbor location using the direction
-                neighbor_location = current_cell.location.add(direction)
-                neighbor = world.get_cell_at(neighbor_location)
+
+                # neighbor_location = current_cell.location.add(direction)
+                # neighbor = world.get_cell_at(neighbor_location)
+
+                neighbor = world.get_cell_at(current_cell.add(direction))
 
                 # Skip invalid spaces to move
                 if neighbor is None or neighbor.is_killer_cell() or neighbor.is_fire_cell() or neighbor.is_on_fire():
@@ -512,7 +524,7 @@ class ExampleAgent(Brain):
                     if neighbor not in cost_from_start or new_cost < cost_from_start[neighbor]:
                         cost_from_start[neighbor] = new_cost
                         # Add the neighbor with the updated cost to the queue
-                        heapq.heappush(frontier,(new_cost, neighbor))
+                        heapq.heappush(frontier,(new_cost, neighbor.location))
 
         # If the loop finishes without finding the survivor, return None
         return None
@@ -609,6 +621,7 @@ class ExampleAgent(Brain):
                                     self.all_agent_pairs[helper_id] = agent_id
                                     self.all_agent_pairs[agent_id] = helper_id
                                     break
+
                     # else:
                     #     for potential_helper_id in agents_needing_help: 
                     #         # for case where another agent in help need to be redirected if theres no other people available
@@ -620,9 +633,10 @@ class ExampleAgent(Brain):
                     #             self.all_agent_status[agent_id] = 1  # Agent being helped
                     #             help_resolved = True  # Mark help as resolved
                     #             break
+
             for agent_id, status in self.all_agent_status.items():
-                #if no one needs help and we have free agents
-                #check the map for survivors
+                # if no one needs help, and we have free agents
+                # check the map for survivors
                 if status == 0: 
                     task = self.all_agent_task_assignment.get(agent_id, None)
                     #d no one needs help, assignment them to new task
@@ -658,6 +672,7 @@ class ExampleAgent(Brain):
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER)) 
             return
+
         cell = world.get_cell_at(self._agent.get_location())
         if cell is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -670,14 +685,27 @@ class ExampleAgent(Brain):
         # calculate move cost to see if the agents need energy
         # move_cost = self.calculate_move_cost_to_goal()
 
+        current_cell = self._agent.get_location()
+        survivor_cell = self.survivor_cell
+
+        BaseAgent.log(LogLevels.Always, survivor_cell)
+
+        energyNeeded = self.energy_to_survivor(current_cell, survivor_cell)
+
+        # Calculate the move cost to the target cell
         # Check if the agent needs charging
-        if self._agent.get_energy_level() < 0:
+
+        BaseAgent.log(LogLevels.Always, energyNeeded)
+
+
+        if self._agent.get_energy_level() < energyNeeded:
             # Move towards the nearest charging station if not on one already
             if not cell.is_charging_cell():
                 self.move_towards_charging_station()
+                return
             if cell.is_charging_cell():
                 # Stay and sleep while energy is not enough
-                while self._agent.get_energy_level() < 0:
+                while self._agent.get_energy_level() < energyNeeded :
                     # Sleep until fully charged
                     self.send_and_end_turn(SLEEP())
                     # Keep the agent sleeping until it is fully recharged
@@ -698,6 +726,7 @@ class ExampleAgent(Brain):
         #                 while self._agent.get_energy_level() < move cost to survivor from current position :
         #                     self.send_and_end_turn(SLEEP())  # Sleep until fully charged
         #                     return  # Keep the agent sleeping until it is fully recharged
+        #
 
         ##################
 
@@ -717,7 +746,7 @@ class ExampleAgent(Brain):
             # Rubble only needs 1 person
             if top_layer.remove_agents == 1:
                 self.send_and_end_turn(TEAM_DIG())
-            # Rubble needs 2 people and we have 2 people on the cell, do dig                
+            # Rubble needs 2 people, and we have 2 people on the cell, do dig
             #if it needs two  people
             elif(top_layer.remove_agents == 2 and self.partner is None):
                 self._agent.send(
@@ -776,7 +805,9 @@ class ExampleAgent(Brain):
             )
             )
             self._agent.send(END_TURN())
-        
+
+
+
         #Charging cell code(ish)
         #When an agent lands on a charging cell:
             #Calculates its own energy
