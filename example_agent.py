@@ -76,7 +76,7 @@ class ExampleAgent(Brain):
         self.inital_assignment = False
         self.assigned_survivors = set()
         
-
+            
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -143,17 +143,7 @@ class ExampleAgent(Brain):
                 return
             try:
                 self.survivor_cell = world.get_cell_at(Location(int(survivor_x), int(survivor_y)))
-            except Exception as e:
-                BaseAgent.log(LogLevels.Always, f"Error parsing survivor: {e}")
-        if msg.startswith("HELP_LOCATION:"):
-            info_part = msg.split(":")[1].strip()
-            detour_x, detour_y = map(int, info_part.split(","))
-            world = self.get_world()
-            if world is None:
-                self.send_and_end_turn(MOVE(Direction.CENTER))
-                return
-            try:
-                self.detour = world.get_cell_at(Location(int(detour_x), int(detour_y)))
+                BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned survivor cell: {self.survivor_cell}")
             except Exception as e:
                 BaseAgent.log(LogLevels.Always, f"Error parsing survivor: {e}")
         if msg.startswith("PATH:"):
@@ -185,7 +175,6 @@ class ExampleAgent(Brain):
                 partner = int(info_part) 
                 self.partner = partner
                 BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned partner {partner}")
-            
         # if msg.startswith("REASSIGNED:"):
             #TODO The agent was free and the leader reassigned them
             #Receive info on survivor they are saving
@@ -492,50 +481,53 @@ class ExampleAgent(Brain):
             for agent_id in agents_needing_help:
                 print(f"Agent {agent_id} need help")
                 partner = self.all_agent_pairs.get(agent_id, None)
+                print(f"Agent {agent_id} has partner: {partner}, no reassigning needed")
                 if partner is None:
                     for helper_id, helper_status in self.all_agent_status.items():
-                        #if they are available
-                        if (helper_status == 0):
-                            hx, hy, henergy = self.get_agent_info(helper_id)
-                            helper_agent_cell = world.get_cell_at(Location(hx, hy))
-                            #check path validity to survivor
-                            survivor = self.all_agent_task_assignment[agent_id]
-                            returned_came_from, returned_cost_from_start = self.a_star(helper_agent_cell, survivor)
-                            valid_path = self.reconstruct_path(returned_came_from, helper_agent_cell, survivor)
-                            seriaized_survivor_location = f"{survivor.location.x},{survivor.location.y}"
-                            if valid_path:
-                                print(f"{helper_id} go help {agent_id}")
-                                self._agent.send(
-                                    SEND_MESSAGE(
-                                        AgentIDList([AgentID(helper_id, 1)]), f"SURVIVOR:{seriaized_survivor_location}"
+                        if (helper_status == 0): #if they are available
+                            h_partner = self.all_agent_pairs.get(helper_id, None)
+                            print(f"Agent {agent_id} has partner: {partner}, no reassigning")
+                            if h_partner is None:
+                                hx, hy, henergy = self.get_agent_info(helper_id)
+                                helper_agent_cell = world.get_cell_at(Location(hx, hy))
+                                #check path validity to survivor
+                                survivor = self.all_agent_task_assignment[agent_id]
+                                returned_came_from, returned_cost_from_start = self.a_star(helper_agent_cell, survivor)
+                                valid_path = self.reconstruct_path(returned_came_from, helper_agent_cell, survivor)
+                                seriaized_survivor_location = f"{survivor.location.x},{survivor.location.y}"
+                                if valid_path:
+                                    print(f"{helper_id} go help {agent_id}")
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(helper_id, 1)]), f"SURVIVOR:{seriaized_survivor_location}"
+                                        )
                                     )
-                                )
-                                self._agent.send(
-                                    SEND_MESSAGE(
-                                        AgentIDList([AgentID(helper_id, 1)]), f"PARTNER:{agent_id}"
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(helper_id, 1)]), f"PARTNER:{agent_id}"
+                                        )
                                     )
-                                )
-                                self._agent.send(
-                                    SEND_MESSAGE(
-                                        AgentIDList([AgentID(agent_id, 1)]), f"PARTNER:{helper_id}"
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(agent_id, 1)]), f"PARTNER:{helper_id}"
+                                        )
                                     )
-                                )
-                                self.all_agent_status[helper_id] = 2  # Helper is now busy
-                                self.all_agent_status[agent_id] = 2  # Helper is now busy
-                                self.all_agent_pairs[helper_id] = agent_id
-                                self.all_agent_pairs[agent_id] = helper_id
-                                break
-                    else:
-                        for potential_helper_id in agents_needing_help: 
-                            # for case where another agent in help need to be redirected if theres no other people available
-                            if potential_helper_id != agent_id:
-                                #TODO send message to agent that help is being assigned
-                                #TODO send message to the helper agent to go to agent location and go to x survivor
-                                print(f"Redirecting Agent {potential_helper_id} to help Agent {agent_id}.")
-                                self.all_agent_status[potential_helper_id] = 1  # Redirected helper is now busy
-                                self.all_agent_status[agent_id] = 1  # Agent being helped
-                                help_resolved = True  # Mark help as resolved
-                                break
+                                    self.all_agent_status[helper_id] = 2  # Helper is now busy
+                                    self.all_agent_status[agent_id] = 2  # Helper is now busy
+                                    self.all_agent_pairs[helper_id] = agent_id
+                                    self.all_agent_pairs[agent_id] = helper_id
+                                    break
+                    # else:
+                    #     for potential_helper_id in agents_needing_help: 
+                    #         # for case where another agent in help need to be redirected if theres no other people available
+                    #         if potential_helper_id != agent_id:
+                    #             #TODO send message to agent that help is being assigned
+                    #             #TODO send message to the helper agent to go to agent location and go to x survivor
+                    #             print(f"Redirecting Agent {potential_helper_id} to help Agent {agent_id}.")
+                    #             self.all_agent_status[potential_helper_id] = 1  # Redirected helper is now busy
+                    #             self.all_agent_status[agent_id] = 1  # Agent being helped
+                    #             help_resolved = True  # Mark help as resolved
+                    #             break
             for agent_id, status in self.all_agent_status.items():
                 #if no one needs help and we have free agents
                 #check the map for survivors
@@ -591,9 +583,7 @@ class ExampleAgent(Brain):
             return
         
         current_grid = world.get_cell_at(self._agent.get_location())
-        
-        print(cell.get_cell_info().agent_id_list.size())
-        
+                
         if (isinstance(top_layer, Rubble) and cell == self.survivor_cell):
             # Rubble only needs 1 person
             if top_layer.remove_agents == 1:
@@ -611,11 +601,24 @@ class ExampleAgent(Brain):
                 self._agent.send(END_TURN())
             else:
                 self.send_and_end_turn(TEAM_DIG())
-                print(f"{self._agent.get_agent_id().id} No other options")
             return
         
+        if (not self.path and self.survivor_cell is not None):
+            #look up their movement queue and direct themselves
+            if len(self.detour)>0:
+                next_detour = self.detour.pop(0) 
+                returned_came_from, returned_cost_from_start = self.a_star(current_grid, next_detour)
+                valid_path = self.reconstruct_path(returned_came_from, current_grid, next_detour)
+                self.path = valid_path
+            elif (current_grid != self.survivor_cell):
+                print("Set path to new cell")
+                returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
+                valid_path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_cell)
+                self.path = valid_path
+                
         #if the agent is on top of the goal cell and there's nothing on top of it
-        if (top_layer is None and self.survivor_cell == cell): 
+            #task completed, allow
+        if (top_layer is None and self.survivor_cell == cell):  
             self._agent.send( SEND_MESSAGE(
                 AgentIDList([AgentID(1, 1)]), f"STATUS:0"
             ))
@@ -625,11 +628,8 @@ class ExampleAgent(Brain):
             ))
             #disband the pair
             self.partner = None
+            self.survivor_cell = None
             BaseAgent.log(LogLevels.Always, "Saved all survivors on that block.")
-
-    
-        print("testing")
-
         
         #first round everyone send their location to the leader for initial task
         if (self._agent.get_round_number()==1):
@@ -646,7 +646,6 @@ class ExampleAgent(Brain):
                     #sends leader their status
             )
             )
-            print("Sending STATUS:9 to the leader.")
             self._agent.send(END_TURN())
         
         #Charging cell code(ish)
@@ -661,17 +660,7 @@ class ExampleAgent(Brain):
                         
         ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
         ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
-        if (not self.path and self.survivor_cell is not None):
-            #look up their movement queue and direct themselves
-            if len(self.detour)>0:
-                next_detour = self.detour.pop(0) 
-                returned_came_from, returned_cost_from_start = self.a_star(current_grid, next_detour)
-                valid_path = self.reconstruct_path(returned_came_from, current_grid, next_detour)
-                self.path = valid_path
-            elif (current_grid != self.survivor_cell):
-                returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
-                valid_path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_cell)
-                self.path = valid_path
+        
             
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
