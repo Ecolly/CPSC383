@@ -21,6 +21,9 @@ from aegis import (
     SurroundInfo,
     Survivor,
     Location,
+    AgentID,
+    WorldObject,
+    SLEEP,
 )
 
 from agent import BaseAgent, Brain, LogLevels
@@ -30,6 +33,11 @@ import heapq
 T = TypeVar('T')
 
 #The a_star algorithm was taken from Assignment 1 by Yufei Zhang
+#Status meaning
+#9 is no status - put at the start of the round
+#0 is free and no task assigned (usually assigned 0 when the agent finishes saving survivor)
+#1 is need help
+#2 is busy
 
 class PriorityQueue:
     def __init__(self):
@@ -55,12 +63,21 @@ class ExampleAgent(Brain):
         self._agent: BaseAgent = BaseAgent.get_base_agent()
         self._agent = BaseAgent.get_base_agent()
         self.path = None  # the path that will be taken
-        self.current = None  # current
-        self.survivor_location = None  # survivors location
-        self.survivor_cell = None
+        self.survivor_cell = None  # assigned survivor cell, ultimate goal
+        self.partner = None
+        self.detour = []#List of cells to make a detour to, but the ultimate goal is the survivor cell!!
+
         #Leader variables
         self.all_agent_information = []
+        self.all_agent_status = {}
+        self.all_agent_task_assignment = {}
+        self.all_agent_pairs = {}
         self.received_all_locations = False
+        self.inital_assignment = False
+        self.assigned_survivors = set()
+        self.energy_needed = 0
+        
+            
     @override
     def handle_connect_ok(self, connect_ok: CONNECT_OK) -> None:
         BaseAgent.log(LogLevels.Always, "CONNECT_OK")
@@ -73,114 +90,77 @@ class ExampleAgent(Brain):
     def handle_dead(self) -> None:
         BaseAgent.log(LogLevels.Always, "DEAD")
 
+    # Call back functions that handle the outcome of actions
+    # smr is the result of the SEND_MESSAGE action may have error codes and status of the message
     @override
     def handle_send_message_result(self, smr: SEND_MESSAGE_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SEND_MESSAGE_RESULT: {smr}")
-<<<<<<< Updated upstream
-        
-        #BaseAgent.log(LogLevels.Test, f"{smr}")
+        msg = smr.msg
         #Differentiate the leader receiving the information vs everyone else here receiving information from the leader
-
+        #LEADER vvvvvvv
         if (self._agent.get_agent_id().id==1):
             #append the info back to the consolidated list of agents
-            msg = smr.msg 
+            #Processing the initital assignment with all the information the agents sent
             if msg.startswith("AGENT_INFO:"):
                 agent_id = smr.from_agent_id.id #Get the agents ID
                 info_part = msg.split(":")[1].strip() 
                 x, y, energy = map(int, info_part.split(","))
-                agent_info_tuple = (x, y, energy)
+                agent_info_tuple = (agent_id, x, y, energy)
                 self.all_agent_information.append(agent_info_tuple)
                 if len(self.all_agent_information) == 7:  # Assuming there are 7 agents
                     self.received_all_locations = True
-                    BaseAgent.log(LogLevels.Always, "All agent locations received.")
-        
-        if smr.msg.startswith("PATH:"):
-            
-=======
-
-        # Leader logic for handling success messages
-        if self._agent.get_agent_id().id == 1:  # Ensure this is executed by the leader
-            if smr.msg.startswith("SUCCESS:"):
-                # Parse the success message for agent's current state
-                success_info = smr.msg.split(":")[1]
-                x, y, energy = map(int, success_info.split(","))
+                    BaseAgent.log(LogLevels.Always, "All agent information received.")
+            #get the status of the agent
+            if msg.startswith("STATUS:"):
+                info_part = msg.split(":")[1].strip()
+                status = int(info_part) 
                 agent_id = smr.from_agent_id.id
-
-                # Update the agent's information and add it back to the pool
-                for agent_info in self.all_agent_information:
-                    if agent_info[0] == agent_id:  # Find and update the agent's info
-                        self.all_agent_information.remove(agent_info)
-                        self.all_agent_information.append((agent_id, x, y, energy))
-                        BaseAgent.log(LogLevels.Always, f"Agent {agent_id} added back to available pool.")
-                        break
-
-                # Trigger task reassignment
-                self.reassign_tasks()
-
-        # Agent logic for handling path updates
-        if smr.msg.startswith("PATH:"):
->>>>>>> Stashed changes
-            serialized_path = smr.msg[5:]  # Extract the path string after "PATH:"
+                self.all_agent_status[agent_id] = status
+                BaseAgent.log(LogLevels.Always, f"Received Agent{agent_id}, status:{status}")
+                
+                if(status == 0):
+                    self.all_agent_pairs[agent_id] = None
+                    self.all_agent_task_assignment[agent_id] = None
+            #assign the status to the agent list the leader keep track of:
+            # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
+                
+            # Update the agents status to the leader, likely after completing a task
+            if msg.startswith("UPDATE:"):
+                agent_id = smr.from_agent_id.id
+                info_part = msg.split(":")[1].strip() 
+                x, y, energy = map(int, info_part.split(","))
+                self.update_agent_state(self.all_agent_information, agent_id, x, y, energy)
+            
+        #AGENTS (also including leader as a regular agent)vvvvvvvvvvvvvv
+        
+        if msg.startswith("SURVIVOR:"):
+            info_part = msg.split(":")[1].strip()
+            survivor_x, survivor_y = map(int, info_part.split(","))
             world = self.get_world()
             if world is None:
                 self.send_and_end_turn(MOVE(Direction.CENTER))
                 return
             try:
-                # Convert the string back into a list of (x, y) coordinates
-                path = [
-                    world.get_cell_at(Location(int(x), int(y)))  # Convert to cell objects
-                    for x, y in (point.split(",") for point in serialized_path.split(";"))
-                ]
-                self.path = path
-                self.survivor_cell = path[-1]  # The last cell is the goal
-                BaseAgent.log(LogLevels.Always, f"Path updated: {self.path}")
+                self.survivor_cell = world.get_cell_at(Location(int(survivor_x), int(survivor_y)))
+                BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned survivor cell: {self.survivor_cell}")
             except Exception as e:
-                BaseAgent.log(LogLevels.Always, f"Error parsing path: {e}")
-<<<<<<< Updated upstream
-=======
-                
-    def reassign_tasks(self):
-        # Check if there are unassigned survivors
-        world = self.get_world()
-        if world is None:
-            return
+                BaseAgent.log(LogLevels.Always, f"Error parsing survivor: {e}")
+        if msg.startswith("PARTNER:"):
+            info_part = msg.split(":")[1].strip()
+            if info_part == "None":
+                self.partner = None
+            else:
+                partner = int(info_part) 
+                self.partner = partner
+                BaseAgent.log(LogLevels.Always, f"{self._agent.get_agent_id()} Assigned partner {partner}")
+        
+            
 
-        surv_list = self.survivors_list(world.get_world_grid())  # Get all survivors
-        if not surv_list:
-            BaseAgent.log(LogLevels.Always, "No survivors remaining. Tasks completed.")
-            return
-
-        # Reassign agents to unassigned survivors
-        assignments = self.agent_to_survivor(self.all_agent_information, surv_list)
-        for assignment in assignments:
-            serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in assignment[2])
-            BaseAgent.log(LogLevels.Always, f"Serialized path {serialized_path}")
-            self._agent.send(
-                SEND_MESSAGE(
-                    AgentIDList([AgentID(assignment[0], 1)]), f"PATH:{serialized_path}"
-                )
-            )
-            # Send Pair ID to Leader
-            pair_id = assignment[3]
-            BaseAgent.log(LogLevels.Always, f"Setting Pair ID to {pair_id}")
-            self._agent.send(
-                SEND_MESSAGE(
-                    AgentIDList([AgentID(1, 1)]), f"PAIR_INFO:{assignment[0]}w{pair_id}"
-                )
-            )
-
-
-
->>>>>>> Stashed changes
     # When the agent attempts to move in a direction, and receive the result of that movement
     # Did the agent successfully move to the intended cell
     # How much was used during the move
-    @override
+
     def handle_move_result(self, mr: MOVE_RESULT) -> None:
-        BaseAgent.log(LogLevels.Always, f"MOVE_RESULT: {mr}")
-        BaseAgent.log(LogLevels.Test, f"{mr}")
-        # after issuing MOVE command, simulation determines if the move is valid
-        # generates a MOVE_RESULT object mr
         print("#--- You need to implement handle_move_result function! ---#")
         self.update_surround(mr.surround_info)
 
@@ -197,10 +177,11 @@ class ExampleAgent(Brain):
     def handle_save_surv_result(self, ssr: SAVE_SURV_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SAVE_SURV_RESULT: {ssr}")
         BaseAgent.log(LogLevels.Test, f"{ssr}")
-
+        self.update_surround(ssr.surround_info)
         print("#--- You need to implement handle_save_surv_result function! ---#")
 
-    # prd, the instance of PREDICT_RESULT, details of predication
+    # prd, the instance of PREDICT_RESULT, details of prediction
+
     @override
     def handle_predict_result(self, prd: PREDICT_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"PREDICT_RESULT: {prd}")
@@ -212,6 +193,7 @@ class ExampleAgent(Brain):
     def handle_sleep_result(self, sr: SLEEP_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SLEEP_RESULT: {sr}")
         BaseAgent.log(LogLevels.Test, f"{sr}")
+        
         print("#--- You need to implement handle_sleep_result function! ---#")
 
     # Information about the result of a cooperative rubble clearing action
@@ -230,22 +212,8 @@ class ExampleAgent(Brain):
             return
 
         # Check the current cell info
-        current_cell = surround_info.get_current_info()
-        if current_cell is None:
-            return
-
-        # Check the top layer to see if rubble was removed
-        top_layer = current_cell.top_layer
-        if top_layer is None:
-            BaseAgent.log(LogLevels.Always, "Rubble cleared.")
-        elif isinstance(top_layer, Survivor):
-            BaseAgent.log(LogLevels.Always, "Rubble cleared, found a survivor!")
-            # Save survivor if found
-            self.send_and_end_turn(SAVE_SURV())
-        else:
-            BaseAgent.log(LogLevels.Always, f"Rubble cleared, updated top layer: {top_layer}")
-
-        print("#--- You need to implement handle_team_dig_result function! ---#")
+        
+        self.update_surround(tdr.surround_info)
     ################################################################
     def get_direction_to_move(self, current_x, current_y, target_x, target_y):
         # Determine horizontal direction
@@ -282,7 +250,8 @@ class ExampleAgent(Brain):
             return Direction.CENTER  # Already at target
 
     def a_star(self, current_cell, goal_cell):
-        # Get hte world
+
+        # Get the world
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -303,7 +272,6 @@ class ExampleAgent(Brain):
             if current_cell == goal_cell:
                 break 
             # BaseAgent.log(LogLevels.Always, f"a_star current: {current_cell}")
-            # BaseAgent.log(LogLevels.Always, f"a_star goal: {goal_cell}")
             current_cell = frontier.get()
             for dir in Direction:
                 # for each neighbour of the current grid that is being evaluated
@@ -311,7 +279,7 @@ class ExampleAgent(Brain):
                 # BaseAgent.log(LogLevels.Always, f"neighbor: {neighbor}")
                 if neighbor is None:
                     continue
-                if neighbor.is_normal_cell():
+                if neighbor.is_normal_cell() or neighbor.is_charging_cell():
                     # if the neighbor didn't come from anywhere yet
                     move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
                     new_cost = cost_from_start[current_cell] + move_cost  # add the cost to move to neighbor cost
@@ -348,7 +316,6 @@ class ExampleAgent(Brain):
                 if cell.survivor_chance != 0:
                     surv_list.append(cell)
         return surv_list
-    
     def charging_cell_list(self, grid): 
         #returns a list of survivor cells
         charging_cell = []
@@ -356,74 +323,24 @@ class ExampleAgent(Brain):
             for cell in row:
                 if cell.is_charging_cell() == True:
                     charging_cell.append(cell)
-        return charging_cell
+        return charging_cell 
 
     def heuristics(self, a, b):
         return max(abs(a.location.x - b.location.x), abs(a.location.y - b.location.y))
-<<<<<<< Updated upstream
-
-    @override
-    def think(self) -> None:
-        #BaseAgent.log(LogLevels.Always, "Thinking about me")
-        BaseAgent.log(LogLevels.Always, "test")
-        
-        
-        #LEADER CODE (agent with id of 1 will be assigned)
-        if (self._agent.get_agent_id().id==1 and self.received_all_locations == True):
-            BaseAgent.log(LogLevels.Always, f"THE GREAT LEADER IS THINKING")
-            #Calculates the path of each agent to each survivor
-            world = self.get_world()
-            if world is None:
-                self.send_and_end_turn(MOVE(Direction.CENTER))
-                return
-            print(self.all_agent_information)  #List of all agent locations
-            current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
-            #READ ME:
-            surv_list = self.survivors_list(world.get_world_grid()) #get the list of the survivors cells
-            self.survivor_location = surv_list[0] #pick one right now, for testing
-            BaseAgent.log(LogLevels.Always, f" Survival List {self.survivor_location}")
-            # cost_list = []
-            # target_cell = current_grid
-            
-            # self.survivor_cell = world.get_cell_at(self.survivor_location)
-            
-            
-            # if surv_list:
-            #     for cell in surv_list:
-            #         returned_came_from, returned_cost_from_start = self.a_star(current_grid, cell.location)
-            #         cost_list.append(returned_cost_from_start[cell])
-            #     lowest_cost = min(cost_list)
-            #     target_cell_index = cost_list.index(lowest_cost)
-            #     target_cell = surv_list[target_cell_index]
-            # else:
-            #     # There are no more survivors left, do nothing
-            #     self.send_and_end_turn(MOVE(Direction.CENTER))
-
-            # self.survivor_location = target_cell.location
-                    
-            returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_location)
-            path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_location)
-            
-            
-            
-            serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in path)
-            BaseAgent.log(LogLevels.Always, f"Serialized path{serialized_path}")
-            self._agent.send(
-                SEND_MESSAGE(
-                    AgentIDList(), f"PATH:{serialized_path}"
-                )
-            ) 
-
-=======
-      
-    def agent_to_survivor(self, agent_list, survivor_list):
     
-        #Assigns agents to survivors based on the cost to reach them.
-        #Includes multi-agent collaboration if needed.
-
-        #Args:
-            #agent_list (list): List of agents with their information (ID, x, y, energy).
-            
+    def update_agent_state(self, agent_info_list, target_agent, new_pos_x, new_pos_y, new_energy):
+        for i, agent in enumerate(agent_info_list):
+            if agent[0] == target_agent:  # Match agent by ID
+                # Create a new tuple with the updated status
+                updated_agent = (agent[0], new_pos_x, new_pos_y, new_energy)
+                # Replace the old tuple in the list
+                agent_info_list[i] = updated_agent
+                break
+    #returns a list of cost to get to each survivor on the map
+    def agent_to_survivor(self, agent_list, survivor_list):
+        #print(f"SURVIVOR LIST {survivor_list}")
+        # agent is a tuple
+        # survivor_list is a list of survivor cells
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -431,8 +348,10 @@ class ExampleAgent(Brain):
 
         agent_costs = []
         for survivor in survivor_list:
+            #print(f"SURVIVOR {survivor}")
+
             for agent in agent_list:
-                # Get the agent's current location as a cell
+                # Get the cell of the agent
                 current_grid = world.get_cell_at(Location(agent[1], agent[2]))
                 returned_came_from, returned_cost_from_start = self.a_star(current_grid, survivor)
                 path = self.reconstruct_path(returned_came_from, current_grid, survivor)
@@ -440,188 +359,386 @@ class ExampleAgent(Brain):
                 if path:  # Valid path
                     cost = returned_cost_from_start.get(survivor, float('inf'))
                     agent_costs.append((cost, agent[0], survivor, path))
-                else:
-                    BaseAgent.log(LogLevels.Always, f"Agent {agent[0]} cannot reach Survivor at {survivor.location}.")
 
-        # Filter out invalid paths (cost = float('inf')) and sort by cost
-        agent_costs = [cost_entry for cost_entry in agent_costs if cost_entry[0] != float('inf')]
+        # Sort the agent_costs based on cost
         agent_costs.sort(key=lambda x: x[0])
 
         # Initialize sets and list for assignments
-        assigned_survivors = set()
+        assigned_survivor2 = set()
         assigned_agents = set()
         assignments = []
-        pair_id = 0
-
+        pairings = {}
         # First pass: Assign one agent to each survivor
         for cost, agent_id, survivor, path in agent_costs:
-            if agent_id not in assigned_agents and survivor not in assigned_survivors:
-                pair_id += 1
-                assignments.append((agent_id, survivor, path, pair_id))  # Assign the agent to the survivor
-                assigned_agents.add(agent_id)  # Mark the agent as assigned
-                assigned_survivors.add(survivor)  # Mark the survivor as assigned
-
-        # Second pass: Assign additional agents for collaboration if needed
+            if agent_id not in assigned_agents and survivor not in self.assigned_survivors:
+                assignments.append((agent_id, survivor, path))  # Assign the agent to the survivor
+                assigned_agents.add(agent_id)             # Mark the agent as assigned
+                self.assigned_survivors.add(survivor)          # Mark the survivor as assigned
+                #print(f"ASSIGNED SURVIVORS {self.assigned_survivors}")
+        agent_costs.sort(key=lambda x: x[0])
+        
+        first_assign = assignments
+        # Second pass: Assign remaining agents to survivors/original agents
         for cost, agent_id, survivor, path in agent_costs:
-            if agent_id not in assigned_agents and survivor in assigned_survivors:
-                # Find the original agent assigned to this survivor
-                original_assignment = next((a for a in assignments if a[1] == survivor), None)
-                if original_assignment and agent_id != original_assignment[0]:
-                    # Get agent cells
-                    original_agent_cell = world.get_cell_at(Location(agent_list[original_assignment[0] - 1][1],
-                                                                    agent_list[original_assignment[0] - 1][2]))
-                    partner_agent_cell = world.get_cell_at(Location(agent_list[agent_id - 1][1],
-                                                                    agent_list[agent_id - 1][2]))
-                    # Find path from partner agent to the original agent
-                    returned_came_from, returned_cost_from_start = self.a_star(partner_agent_cell, original_agent_cell)
-                    valid_path = self.reconstruct_path(returned_came_from, partner_agent_cell, original_agent_cell)
-
-                    if valid_path:
-                        pair_id = original_assignment[3]  # Use the same pair_id as the original assignment
-                        combined_path = valid_path + original_assignment[2]  # Path from partner to survivor
-                        assignments.append((agent_id, survivor, combined_path, pair_id))
-                        assigned_agents.add(agent_id)
-
-        return assignments
-
+            if agent_id not in assigned_agents and survivor not in assigned_survivor2:
+               for primary_agent_id, assigned_survivor, primary_path in first_assign:
+                    if assigned_survivor == survivor:
+                        pairings[primary_agent_id] = agent_id
+                        pairings[agent_id] = primary_agent_id                   
+                        assignments.append((agent_id, survivor, path))  # Assign the agent to the survivor
+                        assigned_agents.add(agent_id)  
+                        assigned_survivor2.add(survivor)   # Mark the agent as assigned   
+                        break
+        return assignments, pairings
+    def get_nearest_charging_cell(self):
+        # calculate where charging cells are located in the cell
+        world = self.get_world()
+        world_grid = world.get_world_grid()
+        charging_cost ={}
+        # locate nearest charging station
+        charging_cells = self.charging_cell_list(world_grid)
+        if not charging_cells:
+            self.send_and_end_turn(MOVE(Direction.CENTER))
+            return 
+        for charging_cell in charging_cells:
+            # Get the cell of the agent
+            agent_cell = world.get_cell_at(self._agent.get_location())
+            returned_came_from, returned_cost_from_start = self.a_star(agent_cell, charging_cell)
+            path = self.reconstruct_path(returned_came_from, agent_cell, charging_cell)
+            if path:  # Valid path
+                cost = returned_cost_from_start.get(charging_cell, float('inf'))
+                charging_cost[charging_cell] = cost 
+            low_cost_charge = min(charging_cost, key = charging_cost.get)
+        return low_cost_charge
     
+    def get_agent_info(self, agent_id):
+        for agent in self.all_agent_information:
+            if agent[0] == agent_id:  # Check if the first element matches the agent_id
+                x, y, energy = agent[1], agent[2], agent[3]
+                return x, y, energy
+        return None
+
     @override
     def think(self) -> None:
-        """
-        The main decision-making logic for the agent.
-        Handles tasks such as rubble clearing, survivor saving, and reassignment after task completion.
-        """
-        BaseAgent.log(LogLevels.Always, "Thinking about task execution.")
->>>>>>> Stashed changes
-
+        #BaseAgent.log(LogLevels.Always, "Thinking about me")
+        BaseAgent.log(LogLevels.Always, "test")
+        if self.survivor_cell is not None:
+            print(f"assigned survivor: {self.survivor_cell}")
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-<<<<<<< Updated upstream
-        if world is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
-            return
-=======
+        
+        current_grid = world.get_cell_at(self._agent.get_location()) #get the cell that the agent is located on
+        surv_list = self.survivors_list(world.get_world_grid()) 
+        print(f"ASSIGNED PARTNER: {self.partner}")
+        
+        #LEADER CODE (agent with id of 1 will be assigned)
+        if (self._agent.get_agent_id().id==1 and self.received_all_locations == True and self.inital_assignment == False):
+            BaseAgent.log(LogLevels.Always, f"THE GREAT LEADER IS THINKING")
+            #Calculates the path of each agent to each survivor
+            #get the list of the survivors cells
+            assignments, pairings = self.agent_to_survivor(self.all_agent_information, surv_list)
+            self.all_agent_pairs = pairings
+            for assignment in assignments:
+                
+                #((agent_id, survivor, path))
+                print(f"Assignment: {assignment}")
+                #iterate each pair in the list
+                partner_id = self.all_agent_pairs.get(assignment[0], None)
 
-        # Get the current grid cell the agent is on
->>>>>>> Stashed changes
+                serialized_path = ";".join(f"{cell.location.x},{cell.location.y}" for cell in assignment[2])
+                seriaized_survivor_location = f"{assignment[1].location.x},{assignment[1].location.y}" 
+                self.all_agent_task_assignment[assignment[0]] = assignment[1]
+                BaseAgent.log(LogLevels.Always, f"Serialized path{serialized_path}")
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(assignment[0], 1)]), f"SURVIVOR:{seriaized_survivor_location}"
+                    )
+                )
+                self._agent.send(
+                    SEND_MESSAGE(
+                        AgentIDList([AgentID(assignment[0], 1)]), f"PARTNER:{partner_id}"
+                    )
+                ) 
+                
+            self.inital_assignment = True
+        
+        # Reassignment and pair reassignment
+        if (self._agent.get_agent_id().id==1): 
+            print(f"all agent info: {self.all_agent_information}")  #List of all agent locations
+            print(f"Agent status: {self.all_agent_status}")
+            print(f"assigned survior: {self.assigned_survivors}")
+            #if the leader, check the status of all agents on the map each round
+            agents_needing_help = [agent_id for agent_id, status in self.all_agent_status.items() if status == 1]
+            for agent_id in agents_needing_help:
+                print(f"Agent {agent_id} need help")
+                partner = self.all_agent_pairs.get(agent_id, None)
+                print(f"Agent {agent_id} has partner: {partner}")
+                if partner is None:
+                    for helper_id, helper_status in self.all_agent_status.items():
+                        if (helper_status == 0): #if they are available
+                            h_partner = self.all_agent_pairs.get(helper_id, None)
+                            print(f"Agent {agent_id} has partner: {partner}, no reassigning")
+                            if h_partner is None:
+                                hx, hy, henergy = self.get_agent_info(helper_id)
+                                helper_agent_cell = world.get_cell_at(Location(hx, hy))
+                                #check path validity to survivor
+                                survivor = self.all_agent_task_assignment[agent_id]
+                                returned_came_from, returned_cost_from_start = self.a_star(helper_agent_cell, survivor)
+                                valid_path = self.reconstruct_path(returned_came_from, helper_agent_cell, survivor)
+                                seriaized_survivor_location = f"{survivor.location.x},{survivor.location.y}"
+                                if valid_path:
+                                    print(f"{helper_id} go help {agent_id}")
+                                    #Tells helper where the survivor that needs help is
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(helper_id, 1)]), f"SURVIVOR:{seriaized_survivor_location}"
+                                        )
+                                    )
+                                    #Tell the helper the agent they are helping
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(helper_id, 1)]), f"PARTNER:{agent_id}"
+                                        )
+                                    )
+                                    #Tell the agent the the helper that is helping them
+                                    self._agent.send(
+                                        SEND_MESSAGE(
+                                            AgentIDList([AgentID(agent_id, 1)]), f"PARTNER:{helper_id}"
+                                        )
+                                    )
+                                    self.all_agent_status[helper_id] = 2  # Helper is now busy
+                                    self.all_agent_status[agent_id] = 2  # Helper is now busy
+                                    self.all_agent_pairs[helper_id] = agent_id
+                                    self.all_agent_pairs[agent_id] = helper_id
+                                    break
+                    # else:
+                    #     for potential_helper_id in agents_needing_help: 
+                    #         # for case where another agent in help need to be redirected if theres no other people available
+                    #         if potential_helper_id != agent_id:
+                    #             #TODO send message to agent that help is being assigned
+                    #             #TODO send message to the helper agent to go to agent location and go to x survivor
+                    #             print(f"Redirecting Agent {potential_helper_id} to help Agent {agent_id}.")
+                    #             self.all_agent_status[potential_helper_id] = 1  # Redirected helper is now busy
+                    #             self.all_agent_status[agent_id] = 1  # Agent being helped
+                    #             help_resolved = True  # Mark help as resolved
+                    #             break
+            for agent_id, status in self.all_agent_status.items():
+                #if no one needs help and we have free agents
+                #check the map for survivors
+                if status == 0: 
+                    task = self.all_agent_task_assignment.get(agent_id, None)
+                    #if no one needs help, assignment them to new task
+                    if task is None:
+                        print("Reassign tasks")
+                        for survivor in surv_list:
+                            if survivor not in self.assigned_survivors:
+                                x, y, energy = self.get_agent_info(agent_id)
+                                agent_cell = world.get_cell_at(Location(x, y))
+                                                            
+                                returned_came_from, returned_cost_from_start = self.a_star(agent_cell, survivor)
+                                valid_path = self.reconstruct_path(returned_came_from, agent_cell, survivor)
+                                #new line added 
+                                energy_needed = returned_cost_from_start.get(survivor, float('inf')) + 1
+                                if valid_path:
+                                    # Assign task if agent has sufficient energy
+                                    if energy >= energy_needed:
+                                        
+                                        #and check for energy
+                                        #send reassignment message
+                                        print(f"Reassigned {agent_id} to {survivor}")
+                                        seriaized_survivor_location = f"{survivor.location.x},{survivor.location.y}" 
+                                        self._agent.send(
+                                            SEND_MESSAGE(
+                                                AgentIDList([AgentID(agent_id, 1)]), f"SURVIVOR: {seriaized_survivor_location}"
+                                            )
+                                        )
+                                        self.all_agent_status[agent_id] = 2 # Mark as busy
+                                        self.assigned_survivors.add(survivor)
+                                        self.all_agent_task_assignment[agent_id] = survivor #update their task
+                                        break
+                                    else:
+                                        # Check if the agent can reach a charging cell
+                                        print(f"Agent {agent_id} has insufficient energy for the survivor task. Checking for charging cell.")
+                                        target_charging_cell = self.get_nearest_charging_cell()
+                                        if target_charging_cell:
+                                            # Calculate path and energy requirement to the charging cell
+                                            charging_returned_came_from, charging_returned_cost_from_start = self.a_star(agent_cell, target_charging_cell)
+                                            charging_path = self.reconstruct_path(charging_returned_came_from, agent_cell, target_charging_cell)
+                                            charging_energy_needed = charging_returned_cost_from_start.get(target_charging_cell, float('inf'))
+                                            
+                                            if charging_path and energy >= charging_energy_needed:
+                                                print(f"Agent {agent_id} can reach the charging cell. Assigning it to recharge.")
+                                                seriaized_charging_location = f"{target_charging_cell.location.x},{target_charging_cell.location.y}"
+                                                self._agent.send(
+                                                    SEND_MESSAGE(
+                                                        AgentIDList([AgentID(agent_id, 1)]), f"SURVIVOR: {seriaized_charging_location}"
+                                                    )
+                                                )
+                                                self.all_agent_task_assignment[agent_id] = target_charging_cell
+                                                self.all_agent_status[agent_id] = 2  # Mark as busy for charging
+                                                break
+                                        # If agent cannot reach a charging cell, skip this survivor assignment
+                                        print(f"Agent {agent_id} cannot reach a charging cell. Skipping survivor assignment.")
+                if status == 1:
+                    print("busy") #for both dig and team dig
+                if status == 2:
+                    print("travelling") 
+                        
+
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
-            self.send_and_end_turn(MOVE(Direction.CENTER))
+            self.send_and_end_turn(MOVE(Direction.CENTER)) 
             return
-
-        # Get the top layer of the current cell
         cell = world.get_cell_at(self._agent.get_location())
         if cell is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
+        print(f"Agent {self._agent.get_agent_id().id} needs {self.energy_needed}, currently have: {self._agent.get_energy_level()}")
+        # Get the top layer at the agent’s current location.
         top_layer = cell.get_top_layer()
-
-<<<<<<< Updated upstream
-        # If rubble is present, clear it and end the turn.
-        if isinstance(top_layer, Rubble):
-            self.send_and_end_turn(TEAM_DIG())
-=======
-        # Task reassignment logic: Check if task is completed.
-        if top_layer is None and self.survivor_cell is not None:
-            if grid.location == self.survivor_cell.location:
-                BaseAgent.log(LogLevels.Always, "Task completed. Sending success message to leader.")
-                self._agent.send(
-                    SEND_MESSAGE(
-                        AgentIDList([AgentID(1, 1)]),  # Send message to the leader (ID 1)
-                        f"SUCCESS:{grid.location.x},{grid.location.y},{self._agent.get_energy_level()}"
-                    )
-                )
-                self.survivor_cell = None  # Reset survivor cell for reassignment
+               
+        if cell.is_charging_cell():
+            if self._agent.get_energy_level() < self.energy_needed:
+                print(f"Agent {self._agent.get_agent_id().id} needs {self.energy_needed}, currently have: {self._agent.get_energy_level()}")
+                # Sleep until fully charged
+                self.send_and_end_turn(SLEEP())
+                # Keep the agent sleeping until it is fully recharged
                 return
-
-        # Handle rubble clearing
-        if isinstance(top_layer, Rubble):
-            if top_layer.remove_agents == 1:  # Single-agent rubble clearing
-                self.send_and_end_turn(TEAM_DIG())
-            else:  # Multi-agent rubble clearing
-                self.send_and_end_turn(TEAM_DIG())  # Placeholder for pair coordination
->>>>>>> Stashed changes
-            return
-
-        # Handle saving a survivor
+                    
+                
+        # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
-            # self.survivor_cell.set_top_layer(None)
-            # self.survivor_cell.survivor_chance = 0  # this should only be applied if all layers are checked
             self.send_and_end_turn(SAVE_SURV())
             return
-
-<<<<<<< Updated upstream
-        current_grid = world.get_cell_at(self._agent.get_location())
-        # print(str(current_grid.location.x)+str (current_grid.location.y))
-
-        # returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_location)
-        # self.path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_cell)
-
-        # Follow the next step in the path, if available.
         
-        #first round everyone send their location
+        current_grid = world.get_cell_at(self._agent.get_location())
+                
+        if (isinstance(top_layer, Rubble) and cell == self.survivor_cell):
+            # Rubble only needs 1 person
+            if top_layer.remove_agents == 1:
+                self.send_and_end_turn(TEAM_DIG())
+            #if it needs two  people
+            
+            elif(top_layer.remove_agents == 2 and self.partner is None):
+                self._agent.send(
+                SEND_MESSAGE(
+                    AgentIDList([AgentID(1, 1)]), f"STATUS:1" #Send message to leader that it needs help
+                ))
+                self._agent.send(SEND_MESSAGE(
+                    AgentIDList([AgentID(1,1)]), f"UPDATE:{current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
+                ))
+                self._agent.send(END_TURN())
+            else:
+                self.send_and_end_turn(TEAM_DIG())
+            return
+        
+
+        # Check if the agent needs charging
+        # if move cost is greater than agent should look for a charging cell
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #             # Move towards the nearest charging station if not on one already
+        #             if not cell.is_charging_cell():
+        #                 self.move_towards_charging_station()
+        #                 return
+        #
+        #             # charge until agent has enough energy to move to the survivor
+        #             if cell.is_charging_cell():
+        #                 # Stay and sleep while energy is below the threshold
+        #                 while self._agent.get_energy_level() < move cost to survivor from current position :
+        #                     self.send_and_end_turn(SLEEP())  # Sleep until fully charged
+                
+        
+        #If the agent has no path set and but they have survivor goal to get to:
+        if (not self.path and self.survivor_cell is not None):
+            #look up their detour and direct themselves if required
+            if len(self.detour)>0:
+                next_detour = self.detour.pop(0) 
+                returned_came_from, returned_cost_from_start = self.a_star(current_grid, next_detour)
+                valid_path = self.reconstruct_path(returned_came_from, current_grid, next_detour)
+                self.path = valid_path
+            #If there are on more detours, and they are not at the survivor cells they were assigned to, then make a calculation to go
+            elif (current_grid != self.survivor_cell):
+                print("Set path to new survivor cell")
+                a_returned_came_from, a_returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
+                valid_path = self.reconstruct_path(a_returned_came_from, current_grid, self.survivor_cell)
+                energy_needed_to_survivor = a_returned_cost_from_start[self.survivor_cell]+1 #account for the energy it cost to save
+                print(f"Energy needed for survivor {energy_needed_to_survivor} Current energy: {self._agent.get_energy_level()}")
+                
+                BaseAgent.log(LogLevels.Always, energy_needed_to_survivor)
+                if self._agent.get_energy_level() < energy_needed_to_survivor:
+                    target_charging_cell = self.get_nearest_charging_cell()
+                    print("Nearest charging cell is {target_chargin g_cell}")
+                    b_returned_came_from, b_returned_cost_from_start= self.a_star(target_charging_cell, self.survivor_cell)
+                    self.energy_needed = b_returned_cost_from_start[self.survivor_cell]+2
+                    self.detour.append(target_charging_cell)
+                    print("taking a detour")
+                else:
+                    self.path = valid_path
+                
+        #if the agent is on top of the goal cell and there's nothing on top of it
+        #task completed, sends the leader Status 0, which means they are free to help/reassign
+        if (top_layer is None and self.survivor_cell == cell):  
+            self._agent.send( SEND_MESSAGE(
+                AgentIDList([AgentID(1, 1)]), f"STATUS:0"
+            ))
+            #update the leader with all the agents most up to date information
+            self._agent.send(SEND_MESSAGE(
+                AgentIDList([AgentID(1,1)]), f"UPDATE:{current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
+            ))
+            #disband the pair
+            self.partner = None
+            self.survivor_cell = None
+            BaseAgent.log(LogLevels.Always, "Saved all survivors on that block.")
+        
+        #first round everyone send their location to the leader for initial task
         if (self._agent.get_round_number()==1):
             BaseAgent.log(LogLevels.Always, f"SENDING MESSAGE")
             self._agent.send(
                 SEND_MESSAGE(
-                    AgentIDList(), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}" 
-                    #I dont know how to make it send to one specific person only >:(
+                    AgentIDList([AgentID(1,1)]), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
+                )    
+            ) 
+            self._agent.send(
+                SEND_MESSAGE(
+                    AgentIDList([AgentID(1,1)]), f"STATUS:9"
+                    #sends leader their status. 9 is only used at the beginning
             )
-        ) 
-=======
-        # Follow the assigned path
->>>>>>> Stashed changes
+            )
+            self._agent.send(END_TURN())
+        
+        #Charging cell code(ish)
+        #When an agent lands on a charging cell:
+            #Calculates its own energy
+            #compare with allocated path energy
+            #WARNING: YOU MIGHT NEED MORE THAN CALCULATED BECAUSE IT MAY TAKE ENERGY TO DIG RUBBLE
+            #if energy < path energy:
+            #   stay on cell (end its turn)
+            #if energy > path energy (plus more for digging maybe)
+            #   move to the next step in path (look at the function below for implementation)
+                        
+        ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
+        ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
         if self.path and len(self.path) > 0:
-            next_location = self.path.pop(0)  # Get the next step in the path
+            next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
             direction = self.get_direction_to_move(agent_location.x, agent_location.y,
-                                                next_location.location.x, next_location.location.y)
-            self.send_and_end_turn(MOVE(direction))  # Move in the calculated direction
-            return
-
-<<<<<<< Updated upstream
-        # Default action: Move the agent north if no other specific conditions are met.
-        self.send_and_end_turn(MOVE(Direction.NORTH))
-    
-    #new function added 
-    def split_agents_to_goals(self, agents, survivors):
-      
-        # Validate inputs
-        if not agents or not survivors:
-            return {}
-        remaining_survivors = survivors[:]
-        assignments = {}
-
-        for agent in agents:
-            if not remaining_survivors:
-                break
- 
-        # Find the nearest survivor using A* pathfinding cost
-        nearest_survivor = min(
-            remaining_survivors,
-            key=lambda s: self.a_star(
-                self.get_world().get_cell_at(agent.location),
-                self.get_world().get_cell_at(s.location),
-            )[1].get(
-                self.get_world().get_cell_at(s.location), float('inf')
+                                                   next_location.location.x, next_location.location.y)
+            self.send_and_end_turn(MOVE(direction))  # Send the move command for the calculated direction
+            SEND_MESSAGE(
+                AgentIDList([AgentID(1, 1)]), f"STATUS:2"
             )
-        )
+            return
+        else:
+            # Default action: Stay in place if no path is available or path is empty
+            self.send_and_end_turn(END_TURN())
+            
 
-        # Assign the agent to the nearest survivor
-        assignments[agent.id] = nearest_survivor
-
-        # Remove the assigned survivor from the list
-        remaining_survivors.remove(nearest_survivor)
-
-        return assignments
-=======
-        # Default action: Stay in place
+        # Default action: Move the agent north if no other specific conditions are met.
         self.send_and_end_turn(MOVE(Direction.CENTER))
->>>>>>> Stashed changes
 
-   
     def send_and_end_turn(self, command: AgentCommand):
         """Send a command and end your turn."""
         BaseAgent.log(LogLevels.Always, f"SENDING {command}")
