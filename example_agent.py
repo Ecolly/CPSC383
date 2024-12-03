@@ -64,13 +64,13 @@ class ExampleAgent(Brain):
         self.path = None  # the path that will be taken
         self.survivor_cell = None  # assigned survivor cell, ultimate goal
         self.partner = None
-        self.detour = [] 
+        self.detour = []#List of cells to make a detour to, but the ultimate goal is the survivor cell!!
+
         #Leader variables
         self.all_agent_information = []
         self.all_agent_status = {}
         self.all_agent_task_assignment = {}
         self.all_agent_pairs = {}
-        #List of cells to make a detour to, but the ultimate goal is the survivor cell!!
         self.received_all_locations = False
         self.inital_assignment = False
         self.assigned_survivors = set()
@@ -119,17 +119,15 @@ class ExampleAgent(Brain):
                 if(status == 0):
                     self.all_agent_pairs[agent_id] = None
                     self.all_agent_task_assignment[agent_id] = None
-                #assign the status to the agent list the leader keep track of:
+            #assign the status to the agent list the leader keep track of:
             # Processes initial pairs into a list "agent_id_pair", that has a list (agent_id, pair_id).
                 
-            # Update the agents status, likely after completing a task
+            # Update the agents status to the leader, likely after completing a task
             if msg.startswith("UPDATE:"):
                 agent_id = smr.from_agent_id.id
                 info_part = msg.split(":")[1].strip() 
                 x, y, energy = map(int, info_part.split(","))
                 self.update_agent_state(self.all_agent_information, agent_id, x, y, energy)
-            #Check for additional survivors
-            #reassign them if there are additional survivors
             
         #AGENTS (also including leader as a regular agent)vvvvvvvvvvvvvv
         
@@ -251,7 +249,6 @@ class ExampleAgent(Brain):
     def a_star(self, current_cell, goal_cell):
 
         # Get the world
-
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -420,7 +417,7 @@ class ExampleAgent(Brain):
             self.all_agent_pairs = pairings
             for assignment in assignments:
                 
-                #((agent_id, survivor, path, pair_id))
+                #((agent_id, survivor, path))
                 print(f"Assignment: {assignment}")
                 #iterate each pair in the list
                 partner_id = self.all_agent_pairs.get(assignment[0], None)
@@ -442,7 +439,8 @@ class ExampleAgent(Brain):
                 
             self.inital_assignment = True
         
-        if (self._agent.get_agent_id().id==1):
+        # Reassignment and pair reassignment
+        if (self._agent.get_agent_id().id==1): 
             print(f"all agent info: {self.all_agent_information}")  #List of all agent locations
             print(f"Agent status: {self.all_agent_status}")
             print(f"assigned survior: {self.assigned_survivors}")
@@ -451,7 +449,7 @@ class ExampleAgent(Brain):
             for agent_id in agents_needing_help:
                 print(f"Agent {agent_id} need help")
                 partner = self.all_agent_pairs.get(agent_id, None)
-                print(f"Agent {agent_id} has partner: {partner}, no reassigning needed")
+                print(f"Agent {agent_id} has partner: {partner}")
                 if partner is None:
                     for helper_id, helper_status in self.all_agent_status.items():
                         if (helper_status == 0): #if they are available
@@ -467,16 +465,19 @@ class ExampleAgent(Brain):
                                 seriaized_survivor_location = f"{survivor.location.x},{survivor.location.y}"
                                 if valid_path:
                                     print(f"{helper_id} go help {agent_id}")
+                                    #Tells helper where the survivor that needs help is
                                     self._agent.send(
                                         SEND_MESSAGE(
                                             AgentIDList([AgentID(helper_id, 1)]), f"SURVIVOR:{seriaized_survivor_location}"
                                         )
                                     )
+                                    #Tell the helper the agent they are helping
                                     self._agent.send(
                                         SEND_MESSAGE(
                                             AgentIDList([AgentID(helper_id, 1)]), f"PARTNER:{agent_id}"
                                         )
                                     )
+                                    #Tell the agent the the helper that is helping them
                                     self._agent.send(
                                         SEND_MESSAGE(
                                             AgentIDList([AgentID(agent_id, 1)]), f"PARTNER:{helper_id}"
@@ -503,7 +504,7 @@ class ExampleAgent(Brain):
                 #check the map for survivors
                 if status == 0: 
                     task = self.all_agent_task_assignment.get(agent_id, None)
-                    #d no one needs help, assignment them to new task
+                    #if no one needs help, assignment them to new task
                     if task is None:
                         print("Reassign tasks")
                         for survivor in surv_list:
@@ -543,8 +544,6 @@ class ExampleAgent(Brain):
 
         # Get the top layer at the agent’s current location.
         top_layer = cell.get_top_layer()
-
-        # If rubble is present, clear it and end the turn.
         
         
         # If a survivor is present, save them and end the turn.
@@ -558,12 +557,11 @@ class ExampleAgent(Brain):
             # Rubble only needs 1 person
             if top_layer.remove_agents == 1:
                 self.send_and_end_turn(TEAM_DIG())
-            # Rubble needs 2 people and we have 2 people on the cell, do dig                
             #if it needs two  people
             elif(top_layer.remove_agents == 2 and self.partner is None):
                 self._agent.send(
                 SEND_MESSAGE(
-                    AgentIDList([AgentID(1, 1)]), f"STATUS:1"
+                    AgentIDList([AgentID(1, 1)]), f"STATUS:1" #Send message to leader that it needs help
                 ))
                 self._agent.send(SEND_MESSAGE(
                     AgentIDList([AgentID(1,1)]), f"UPDATE:{current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
@@ -573,13 +571,15 @@ class ExampleAgent(Brain):
                 self.send_and_end_turn(TEAM_DIG())
             return
         
+        #If the agent has no path set and but they have survivor goal to get to:
         if (not self.path and self.survivor_cell is not None):
-            #look up their movement queue and direct themselves
+            #look up their detour and direct themselves if required
             if len(self.detour)>0:
                 next_detour = self.detour.pop(0) 
                 returned_came_from, returned_cost_from_start = self.a_star(current_grid, next_detour)
                 valid_path = self.reconstruct_path(returned_came_from, current_grid, next_detour)
                 self.path = valid_path
+            #If there are on more detours, and they are not at the survivor cells they were assigned to, then make a calculation to go
             elif (current_grid != self.survivor_cell):
                 print("Set path to new cell")
                 returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
@@ -587,7 +587,7 @@ class ExampleAgent(Brain):
                 self.path = valid_path
                 
         #if the agent is on top of the goal cell and there's nothing on top of it
-            #task completed, allow
+        #task completed, sends the leader Status 0, which means they are free to help/reassign
         if (top_layer is None and self.survivor_cell == cell):  
             self._agent.send( SEND_MESSAGE(
                 AgentIDList([AgentID(1, 1)]), f"STATUS:0"
@@ -607,13 +607,12 @@ class ExampleAgent(Brain):
             self._agent.send(
                 SEND_MESSAGE(
                     AgentIDList([AgentID(1,1)]), f"AGENT_INFO: {current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
-                    #sends the leader their location, their energy level, and status (0) being no status 
                 )    
             ) 
             self._agent.send(
                 SEND_MESSAGE(
                     AgentIDList([AgentID(1,1)]), f"STATUS:9"
-                    #sends leader their status
+                    #sends leader their status. 9 is only used at the beginning
             )
             )
             self._agent.send(END_TURN())
@@ -630,8 +629,6 @@ class ExampleAgent(Brain):
                         
         ##### IF YOU'RE DOING CHARGING CELLS, MAKE SURE TO NOT TRIGGER THE PATH FOLLOWING BELOW, END TURN BEFORE IT REACHES IT############################
         ########################PATH FOLLOWING ALGORITHM BELOW#####################################################################################    
-        
-            
         if self.path and len(self.path) > 0:
             next_location = self.path.pop(0)  # Get the next step in the path and remove it from the list
             agent_location = self._agent.get_location()
