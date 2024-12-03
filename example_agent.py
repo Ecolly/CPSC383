@@ -23,6 +23,7 @@ from aegis import (
     Location,
     AgentID,
     WorldObject,
+    SLEEP,
 )
 
 from agent import BaseAgent, Brain, LogLevels
@@ -74,6 +75,7 @@ class ExampleAgent(Brain):
         self.received_all_locations = False
         self.inital_assignment = False
         self.assigned_survivors = set()
+        self.energy_needed = 0
         
             
     @override
@@ -191,6 +193,7 @@ class ExampleAgent(Brain):
     def handle_sleep_result(self, sr: SLEEP_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SLEEP_RESULT: {sr}")
         BaseAgent.log(LogLevels.Test, f"{sr}")
+        
         print("#--- You need to implement handle_sleep_result function! ---#")
 
     # Information about the result of a cooperative rubble clearing action
@@ -276,7 +279,7 @@ class ExampleAgent(Brain):
                 # BaseAgent.log(LogLevels.Always, f"neighbor: {neighbor}")
                 if neighbor is None:
                     continue
-                if neighbor.is_normal_cell():
+                if neighbor.is_normal_cell() or neighbor.is_charging_cell():
                     # if the neighbor didn't come from anywhere yet
                     move_cost = neighbor.move_cost if neighbor.move_cost is not None else 1
                     new_cost = cost_from_start[current_cell] + move_cost  # add the cost to move to neighbor cost
@@ -387,6 +390,29 @@ class ExampleAgent(Brain):
                         assigned_survivor2.add(survivor)   # Mark the agent as assigned   
                         break
         return assignments, pairings
+    def get_nearest_charging_cell(self):
+        # calculate where charging cells are located in the cell
+        world = self.get_world()
+        world_grid = world.get_world_grid()
+        charging_cell = self.charging_cell_list(world_grid)
+
+        # locate nearest charging station
+        charging_cells = self.charging_cell_list(world_grid)
+        if not charging_cells:
+            self.send_and_end_turn(MOVE(Direction.CENTER))
+            return 
+        for charging_cell in charging_cell:
+            # Get the cell of the agent
+            charging_cost ={}
+            agent_cell = world.get_cell_at(self._agent.get_location())
+            returned_came_from, returned_cost_from_start = self.a_star(agent_cell, charging_cell)
+            path = self.reconstruct_path(returned_came_from, agent_cell, charging_cell)
+            if path:  # Valid path
+                cost = returned_cost_from_start.get(charging_cell, float('inf'))
+                charging_cost[charging_cell] = cost 
+            low_cost_charge = min(charging_cost, key = charging_cost.get)
+        return low_cost_charge
+    
     def get_agent_info(self, agent_id):
         for agent in self.all_agent_information:
             if agent[0] == agent_id:  # Check if the first element matches the agent_id
@@ -398,7 +424,8 @@ class ExampleAgent(Brain):
     def think(self) -> None:
         #BaseAgent.log(LogLevels.Always, "Thinking about me")
         BaseAgent.log(LogLevels.Always, "test")
-        
+        if self.survivor_cell is not None:
+            print(f"assigned survivor: {self.survivor_cell}")
         world = self.get_world()
         if world is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
@@ -532,7 +559,8 @@ class ExampleAgent(Brain):
                         print("busy") #for both dig and team dig
                     if status == 2:
                         print("travelling") 
-                
+                        
+
         grid = world.get_cell_at(self._agent.get_location())
         if grid is None:
             self.send_and_end_turn(MOVE(Direction.CENTER)) 
@@ -541,10 +569,20 @@ class ExampleAgent(Brain):
         if cell is None:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return
-
+        print(f"Agent {self._agent.get_agent_id().id} needs {self.energy_needed}, currently have: {self._agent.get_energy_level()}")
         # Get the top layer at the agent’s current location.
         top_layer = cell.get_top_layer()
-        
+               
+        if cell.is_charging_cell():
+            if self._agent.get_energy_level() < self.energy_needed:
+                print(f"Agent {self._agent.get_agent_id().id} needs {self.energy_needed}, currently have: {self._agent.get_energy_level()}")
+                # Sleep until fully charged
+                self.send_and_end_turn(SLEEP())
+                # Keep the agent sleeping until it is fully recharged
+                return
+                    
+                
+            
         
         # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
@@ -558,6 +596,7 @@ class ExampleAgent(Brain):
             if top_layer.remove_agents == 1:
                 self.send_and_end_turn(TEAM_DIG())
             #if it needs two  people
+            
             elif(top_layer.remove_agents == 2 and self.partner is None):
                 self._agent.send(
                 SEND_MESSAGE(
@@ -571,6 +610,23 @@ class ExampleAgent(Brain):
                 self.send_and_end_turn(TEAM_DIG())
             return
         
+
+        # Check if the agent needs charging
+        # if move cost is greater than agent should look for a charging cell
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #         if self._agent.get_energy_level() < move cost to survivor from current position :
+        #             # Move towards the nearest charging station if not on one already
+        #             if not cell.is_charging_cell():
+        #                 self.move_towards_charging_station()
+        #                 return
+        #
+        #             # charge until agent has enough energy to move to the survivor
+        #             if cell.is_charging_cell():
+        #                 # Stay and sleep while energy is below the threshold
+        #                 while self._agent.get_energy_level() < move cost to survivor from current position :
+        #                     self.send_and_end_turn(SLEEP())  # Sleep until fully charged
+                
+        
         #If the agent has no path set and but they have survivor goal to get to:
         if (not self.path and self.survivor_cell is not None):
             #look up their detour and direct themselves if required
@@ -581,10 +637,18 @@ class ExampleAgent(Brain):
                 self.path = valid_path
             #If there are on more detours, and they are not at the survivor cells they were assigned to, then make a calculation to go
             elif (current_grid != self.survivor_cell):
-                print("Set path to new cell")
-                returned_came_from, returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
-                valid_path = self.reconstruct_path(returned_came_from, current_grid, self.survivor_cell)
-                self.path = valid_path
+                print("Set path to new survivor cell")
+                a_returned_came_from, a_returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
+                valid_path = self.reconstruct_path(a_returned_came_from, current_grid, self.survivor_cell)
+                energy_needed_to_survivor = a_returned_cost_from_start[self.survivor_cell]
+                BaseAgent.log(LogLevels.Always, energy_needed_to_survivor)
+                if self._agent.get_energy_level() < energy_needed_to_survivor:
+                    target_charging_cell = self.get_nearest_charging_cell()
+                    b_returned_came_from, b_returned_cost_from_start = self.a_star(target_charging_cell, self.survivor_cell)
+                    self.energy_needed = b_returned_cost_from_start[self.survivor_cell]+2
+                    self.detour.append(target_charging_cell)
+                else:
+                    self.path = valid_path
                 
         #if the agent is on top of the goal cell and there's nothing on top of it
         #task completed, sends the leader Status 0, which means they are free to help/reassign
@@ -641,7 +705,7 @@ class ExampleAgent(Brain):
             return
         else:
             # Default action: Stay in place if no path is available or path is empty
-            self.send_and_end_turn(MOVE(Direction.CENTER))
+            self.send_and_end_turn(END_TURN())
             
 
         # Default action: Move the agent north if no other specific conditions are met.
