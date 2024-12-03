@@ -394,16 +394,14 @@ class ExampleAgent(Brain):
         # calculate where charging cells are located in the cell
         world = self.get_world()
         world_grid = world.get_world_grid()
-        charging_cell = self.charging_cell_list(world_grid)
-
+        charging_cost ={}
         # locate nearest charging station
         charging_cells = self.charging_cell_list(world_grid)
         if not charging_cells:
             self.send_and_end_turn(MOVE(Direction.CENTER))
             return 
-        for charging_cell in charging_cell:
+        for charging_cell in charging_cells:
             # Get the cell of the agent
-            charging_cost ={}
             agent_cell = world.get_cell_at(self._agent.get_location())
             returned_came_from, returned_cost_from_start = self.a_star(agent_cell, charging_cell)
             path = self.reconstruct_path(returned_came_from, agent_cell, charging_cell)
@@ -582,8 +580,6 @@ class ExampleAgent(Brain):
                 return
                     
                 
-            
-        
         # If a survivor is present, save them and end the turn.
         if isinstance(top_layer, Survivor):
             self.send_and_end_turn(SAVE_SURV())
@@ -640,13 +636,17 @@ class ExampleAgent(Brain):
                 print("Set path to new survivor cell")
                 a_returned_came_from, a_returned_cost_from_start = self.a_star(current_grid, self.survivor_cell)
                 valid_path = self.reconstruct_path(a_returned_came_from, current_grid, self.survivor_cell)
-                energy_needed_to_survivor = a_returned_cost_from_start[self.survivor_cell]
+                energy_needed_to_survivor = a_returned_cost_from_start[self.survivor_cell]+1 #account for the energy it cost to save
+                print(f"Energy needed for survivor {energy_needed_to_survivor} Current energy: {self._agent.get_energy_level()}")
+                
                 BaseAgent.log(LogLevels.Always, energy_needed_to_survivor)
                 if self._agent.get_energy_level() < energy_needed_to_survivor:
                     target_charging_cell = self.get_nearest_charging_cell()
-                    b_returned_came_from, b_returned_cost_from_start = self.a_star(target_charging_cell, self.survivor_cell)
+                    print("Nearest charging cell is {target_chargin g_cell}")
+                    b_returned_came_from, b_returned_cost_from_start= self.a_star(target_charging_cell, self.survivor_cell)
                     self.energy_needed = b_returned_cost_from_start[self.survivor_cell]+2
                     self.detour.append(target_charging_cell)
+                    print("taking a detour")
                 else:
                     self.path = valid_path
                 
