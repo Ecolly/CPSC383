@@ -193,8 +193,11 @@ class ExampleAgent(Brain):
     def handle_sleep_result(self, sr: SLEEP_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SLEEP_RESULT: {sr}")
         BaseAgent.log(LogLevels.Test, f"{sr}")
-        
-        print("#--- You need to implement handle_sleep_result function! ---#")
+
+        if sr.was_successful:
+            BaseAgent.log(LogLevels.Always, f"Agent has slept. Current energy level: {sr.charge_energy}")
+        else:
+            BaseAgent.log(LogLevels.Always, f"Agent could not sleep")
 
     # Information about the result of a cooperative rubble clearing action
     @override
