@@ -437,7 +437,7 @@ class ExampleAgent(Brain):
             return None        
         low_cost_charge_cell = min(charging_cost, key = charging_cost.get)
         lowest_cost = charging_cost[low_cost_charge_cell]
-        return low_cost_charge_cell, 
+        return low_cost_charge_cell, lowest_cost
     
     def get_nearest_charging_cell(self):
         # calculate where charging cells are located in the cell
