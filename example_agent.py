@@ -193,8 +193,11 @@ class ExampleAgent(Brain):
     def handle_sleep_result(self, sr: SLEEP_RESULT) -> None:
         BaseAgent.log(LogLevels.Always, f"SLEEP_RESULT: {sr}")
         BaseAgent.log(LogLevels.Test, f"{sr}")
-        
-        print("#--- You need to implement handle_sleep_result function! ---#")
+
+        if sr.was_successful:
+            BaseAgent.log(LogLevels.Always, f"Agent has slept. Current energy level: {sr.charge_energy}")
+        else:
+            BaseAgent.log(LogLevels.Always, f"Agent could not sleep")
 
     # Information about the result of a cooperative rubble clearing action
     @override
@@ -588,11 +591,22 @@ class ExampleAgent(Brain):
         current_grid = world.get_cell_at(self._agent.get_location())
                 
         if (isinstance(top_layer, Rubble) and cell == self.survivor_cell):
+        
+            # If rubble requires too much energy
+            if top_layer.remove_energy > self._agent.get_energy_level():
+                target_charging_cell = self.get_nearest_charging_cell()
+                b_returned_came_from, b_returned_cost_from_start= self.a_star(target_charging_cell, self.survivor_cell)
+                self.energy_needed = b_returned_cost_from_start[self.survivor_cell]+2
+                self.energy_needed += top_layer.remove_energy
+                self.detour.append(target_charging_cell)
+                print("taking a detour")
+        
             # Rubble only needs 1 person
-            if top_layer.remove_agents == 1:
+            elif top_layer.remove_agents == 1:
                 self.send_and_end_turn(TEAM_DIG())
+                return
+                
             #if it needs two  people
-            
             elif(top_layer.remove_agents == 2 and self.partner is None):
                 self._agent.send(
                 SEND_MESSAGE(
@@ -602,9 +616,10 @@ class ExampleAgent(Brain):
                     AgentIDList([AgentID(1,1)]), f"UPDATE:{current_grid.location.x},{current_grid.location.y},{self._agent.get_energy_level()}"
                 ))
                 self._agent.send(END_TURN())
+                return
             else:
                 self.send_and_end_turn(TEAM_DIG())
-            return
+                return
         
 
         # Check if the agent needs charging
