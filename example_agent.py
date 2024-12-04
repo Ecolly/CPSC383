@@ -352,27 +352,32 @@ class ExampleAgent(Brain):
         agent_costs = []
         for survivor in survivor_list:
             #print(f"SURVIVOR {survivor}")
-            energy = agent[3]
             for agent in agent_list:
+                energy = agent[3]
                 # Get the cell of the agent
                 current_grid = world.get_cell_at(Location(agent[1], agent[2]))
                 returned_came_from, returned_cost_from_start = self.a_star(current_grid, survivor)
                 path = self.reconstruct_path(returned_came_from, current_grid, survivor)
-                cost = returned_cost_from_start[survivor]
-                if (cost > energy):
-                        #look for nearest charging grid
-                    nearest_cell, m_nearest_cell_energy = self.get_charging_cells_near(current_grid)
-                    if nearest_cell is None:
-                        continue
-                    print(f"Nearest charging cell need {m_nearest_cell_energy}")
-                    if (m_nearest_cell_energy>energy):
-                        continue
+                if path:
+                    cost = returned_cost_from_start[survivor]
+                    if (cost > energy):
+                            #look for nearest charging grid
+                        if self.get_charging_cells_near(current_grid) is not None:
+                            nearest_cell, m_nearest_cell_energy = self.get_charging_cells_near(current_grid)
+                            if nearest_cell is None:
+                                continue
+                            print(f"Nearest charging cell need {m_nearest_cell_energy}")
+                            if (m_nearest_cell_energy>energy):
+                                continue
+                            else:
+                                cost = returned_cost_from_start.get(survivor, float('inf'))
+                                agent_costs.append((cost, agent[0], survivor, path))
+                        else:
+                            cost = returned_cost_from_start.get(survivor, float('inf'))
+                            agent_costs.append((cost, agent[0], survivor, path))
                     else:
                         cost = returned_cost_from_start.get(survivor, float('inf'))
                         agent_costs.append((cost, agent[0], survivor, path))
-                else:
-                    cost = returned_cost_from_start.get(survivor, float('inf'))
-                    agent_costs.append((cost, agent[0], survivor, path))
 
         # Sort the agent_costs based on cost
         agent_costs.sort(key=lambda x: x[0])
@@ -409,11 +414,11 @@ class ExampleAgent(Brain):
         world = self.get_world()
         world_grid = world.get_world_grid()
         charging_cells = self.charging_cell_list(world_grid)
+        charging_cost = {}
         if not charging_cells:
             return None
         for charging_cell in charging_cells:
             # Get the cell of the agent
-            charging_cost ={}
             returned_came_from, returned_cost_from_start = self.a_star(agent_cell, charging_cell)
             path = self.reconstruct_path(returned_came_from, agent_cell, charging_cell)
             if path:  # Valid path
