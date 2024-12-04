@@ -371,7 +371,8 @@ class ExampleAgent(Brain):
                     cost = returned_cost_from_start[survivor]
                     if (cost > energy):
                             #look for nearest charging grid
-                        if self.get_charging_cells_near(current_grid) is not None:
+                        # if self.get_charging_cells_near(current_grid) is not None:
+                        if len(self.get_charging_cells_near(current_grid)) > 1:
                             nearest_cell, m_nearest_cell_energy = self.get_charging_cells_near(current_grid)
                             if nearest_cell is None:
                                 continue
