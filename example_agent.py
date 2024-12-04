@@ -1,3 +1,12 @@
+# CPSC 383
+# FALL 2024
+# December 3, 2024
+# T01 Yufei Zhang
+# T02 Trisha Ricalde
+# T02 Meenu Maheru
+# T01 Sarah Hazrat Dhuka
+
+
 from typing import override
 
 from aegis import (
